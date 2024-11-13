@@ -360,7 +360,7 @@ const checkBotsAndResetInterval = async () => {
     if (lastTwoCheckResults.length > 2) lastTwoCheckResults.shift(); // Keep only the last two results
 
     // Reset interval if no bot messages were deleted for two rounds
-    if (lastTwoCheckResults.length === 2 && lastTwoCheckResults.every(result => !result)) {
+    if (lastTwoCheckResults.length === 2 && lastTwoCheckResults.every(result => !result) && checkInterval != 60 * 60000) {
         checkInterval = 60 * 60000; // Reset to 60 minutes (1 hour)
         console.log("No commands recognized for a while, resetting timer to check every 1 hour.");
 
