@@ -1,0 +1,16 @@
+{
+    "name": "the-cleaner-bot",
+    "version": "1.0.0",
+    "description": "A Discord bot to clean messages from other bots.",
+    "main": "index.js",
+    "type": "module",
+    "scripts": {
+      "start": "pm2 start index.js --name 'TheCleaner'"
+    },
+    "dependencies": {
+      "discord.js": "^14.0.0",
+      "dotenv": "^10.0.0",
+      "pm2": "^5.0.0"
+    }
+  }
+  
