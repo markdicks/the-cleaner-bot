@@ -2,13 +2,16 @@ import fs from 'fs';
 import path from 'path';
 import discord from 'discord.js';
 import dotenv from 'dotenv';
+import { normalizeToken, startRuntime } from './runtime.js';
 dotenv.config();
 
 // Destructure the necessary objects from discord.js
-const { Client, GatewayIntentBits, REST, Routes } = discord;
+const { Client, Collection, GatewayIntentBits, REST, Routes } = discord;
+const discordToken = normalizeToken(process.env.DISCORD_TOKEN);
+const appVersion = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf-8')).version;
 
 // Path to the configuration file and its folder
-const configFolderPath = './database';
+const configFolderPath = process.env.DATA_DIRECTORY || './database';
 const configFilePath = path.join(configFolderPath, 'botConfig.json');
 
 // Default configuration
@@ -17,7 +20,7 @@ const defaultConfig = { botList: [], allowedRoles: [], logChannelId: null, monit
 // Create necessary directories if they don't exist
 const createDirectoriesIfNeeded = () => {
     if (!fs.existsSync(configFolderPath)) {
-        fs.mkdirSync(configFolderPath);
+        fs.mkdirSync(configFolderPath, { recursive: true });
         console.log(`Created directory: ${configFolderPath}`);
     }
 };
@@ -65,7 +68,7 @@ const MAX_INTERVAL = 12 * 7 * 24 * 60 * 60 * 1000; // 12 weeks in milliseconds
 
 // Register Slash Commands
 async function registerCommands(client) {
-    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    const rest = new REST({ version: '10' }).setToken(discordToken);
 
     try {
         console.log("Started refreshing application (/) commands.");
@@ -204,7 +207,7 @@ const handleCommands = async (interaction) => {
         
             // Immediately update the interval by calling the checking function again
             clearTimeout(checkTimeout); // Clear the current timeout
-            checkBotsAndResetInterval(); // Start the checking process again with the new interval
+            runCleaningCheck(); // Start the checking process again with the new interval
         
             await interaction.reply(`Check interval modified to ${interval} minutes.`);
         }
@@ -243,12 +246,17 @@ const client = new Client({
     ]
 });
 
+client.on('error', error => {
+    console.error('Discord client error:', error.code || error.name);
+});
+
 client.once('ready', async () => {
     console.log(`Logged in as ${client.user.tag}`);
     client.user.setActivity("with the other bots xD");
 
     // Register commands on bot startup
     await registerCommands(client);
+    runCleaningCheck();
 });
 
 // Logic for checking bots and resetting interval if necessary
@@ -282,19 +290,20 @@ const checkBotsAndResetInterval = async () => {
 
             try {
                 let lastMessageId = null;
+                let fetchedMessages;
                 
 
                 // Fetch messages in batches, but only from the last 12 hours
                 do {
                     try {
                         // Fetch a batch of messages
-                        const fetchedMessages = await channel.messages.fetch({
+                        fetchedMessages = await channel.messages.fetch({
                             limit: 100, // Fetch up to 100 messages at a time
                             before: lastMessageId, // Fetch messages before the last message ID from the previous batch
                         });
 
                         // Ensure that fetchedMessages is a valid collection before accessing size
-                        if (!fetchedMessages || !(fetchedMessages instanceof Discord.Collection)) {
+                        if (!fetchedMessages || !(fetchedMessages instanceof Collection)) {
                             console.error(`Invalid messages fetched in channel ${channelId}`);
                             break; // Exit the loop if no valid messages are returned
                         }
@@ -320,9 +329,10 @@ const checkBotsAndResetInterval = async () => {
 
                     } catch (error) {
                         console.error(`Error fetching messages in channel ${channelId}:`, error);
+                        break;
                     }
 
-                } while (totalFetchedMessages < 200 && fetchedMessages.size === 100); // Fetch messages in batches until 200 messages or less are fetched
+                } while (totalFetchedMessages < 200 && fetchedMessages?.size === 100); // Fetch messages in batches until 200 messages or less are fetched
             } catch (error) {
                 console.error(`Error fetching messages in channel ${channelId}:`, error);
             }
@@ -367,30 +377,29 @@ const checkBotsAndResetInterval = async () => {
         // Send a message to the log channel to notify that the interval has been reset
         const logChannel = client.channels.cache.get(config.logChannelId); // Retrieve log channel from config
         if (logChannel) {
-            logChannel.send("No commands recognized for a while, resetting timer to check every 1 hour.");
+                await logChannel.send("No commands recognized for a while, resetting timer to check every 1 hour.");
         } else {
             console.error("Log channel not found.");
         }
     }
 
     // Schedule the next check with the updated interval
-    checkTimeout = setTimeout(checkBotsAndResetInterval, checkInterval);
+    checkTimeout = setTimeout(runCleaningCheck, checkInterval);
 };
 
-// Initialize the checkBotsAndResetInterval function to start running
-checkBotsAndResetInterval();
-
-
-
-
-
+const runCleaningCheck = () => {
+    void checkBotsAndResetInterval().catch(error => {
+        console.error('Cleaning check failed:', error);
+        checkTimeout = setTimeout(runCleaningCheck, checkInterval);
+    });
+};
 // Command handler event listener
 client.on('interactionCreate', handleCommands);
 
-// Error handling for login
-client.login(process.env.DISCORD_TOKEN)
-    .then(() => console.log("Bot logged in successfully."))
-    .catch((error) => {
-        console.error("Failed to log in:", error);
-        process.exit(1); // Exit the process if login fails
-    });
+const runtime = await startRuntime({ client, token: discordToken, version: appVersion });
+const shutdown = async () => {
+    clearTimeout(checkTimeout);
+    await runtime.stop();
+};
+process.once('SIGTERM', () => { void shutdown().catch(() => { process.exitCode = 1; }); });
+process.once('SIGINT', () => { void shutdown().catch(() => { process.exitCode = 1; }); });
