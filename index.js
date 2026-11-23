@@ -396,10 +396,17 @@ const runCleaningCheck = () => {
 // Command handler event listener
 client.on('interactionCreate', handleCommands);
 
-const runtime = await startRuntime({ client, token: discordToken, version: appVersion });
+let runtime;
+const startup = startRuntime({ client, token: discordToken, version: appVersion })
+    .then(service => { runtime = service; })
+    .catch(error => {
+        console.error('HTTP startup failed:', error.message);
+        process.exitCode = 1;
+    });
 const shutdown = async () => {
     clearTimeout(checkTimeout);
-    await runtime.stop();
+    await startup;
+    if (runtime) await runtime.stop();
 };
 process.once('SIGTERM', () => { void shutdown().catch(() => { process.exitCode = 1; }); });
 process.once('SIGINT', () => { void shutdown().catch(() => { process.exitCode = 1; }); });

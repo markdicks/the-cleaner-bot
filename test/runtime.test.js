@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { normalizeToken, startRuntime } from '../runtime.js';
 
@@ -76,4 +82,38 @@ test('invalid port values produce an actionable startup error', async () => {
 test('copied wrapping quotes and Bot prefix are normalized', () => {
     assert.equal(normalizeToken('  "Bot example-token"  '), 'example-token');
     assert.equal(normalizeToken(undefined), '');
+});
+
+test('Hostinger-style CommonJS loading starts the real HTTP service without top-level await', async t => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'cleaner-startup-'));
+    const child = spawn(process.execPath, ['--input-type=commonjs', '-e', "require('./index.js')"], {
+        cwd: fileURLToPath(new URL('..', import.meta.url)),
+        env: { ...process.env, DISCORD_TOKEN: '', PORT: '0', DATA_DIRECTORY: directory },
+        windowsHide: true
+    });
+    t.after(async () => {
+        if (child.exitCode === null && child.signalCode === null) {
+            const closed = once(child, 'close');
+            child.kill();
+            await closed;
+        }
+        if (path.dirname(path.resolve(directory)) !== path.resolve(os.tmpdir())) throw new Error('Unexpected test directory');
+        await rm(directory, { recursive: true, force: true });
+    });
+    let output = '';
+    let errors = '';
+    child.stderr.on('data', chunk => { errors += chunk; });
+    const port = await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', code => reject(new Error(`Hosted entry exited (${code}): ${errors}`)));
+        child.stdout.on('data', chunk => {
+            output += chunk;
+            const match = output.match(/HTTP service listening on port (\d+)/);
+            if (match) resolve(Number(match[1]));
+        });
+    });
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).discord.errorCode, 'token_missing');
+    assert.ok(!errors.includes('ERR_REQUIRE_ASYNC_MODULE'));
 });
