@@ -9,7 +9,7 @@ export function normalizeToken(value) {
     return token;
 }
 
-export async function startRuntime({ client, token, port = process.env.PORT || 3000, host = '0.0.0.0', version, logger = console, createHandler }) {
+export async function startRuntime({ client, token, port = process.env.PORT || 3000, host = '0.0.0.0', version, logger = console, createHandler, getStorageStatus }) {
     const listenPort = Number(port);
     if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
         throw new Error('PORT must be a valid TCP port number.');
@@ -22,6 +22,7 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
         service: 'the-cleaner-bot',
         version,
         uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+        ...(getStorageStatus ? { storage: getStorageStatus() } : {}),
         discord: {
             connected: client.isReady(),
             status: client.isReady() ? 'connected' : discordStatus,

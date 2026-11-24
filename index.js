@@ -16,6 +16,7 @@ const startup = startRuntime({
     client: bot,
     token: () => bot.getToken(),
     version,
+    getStorageStatus: () => ({ provider: store.mode, status: store.status }),
     createHandler: getStatus => createDashboard({ store, bot, version, getStatus })
 }).then(service => { runtime = service; }).catch(error => {
     console.error('HTTP startup failed:', error.code || error.name);

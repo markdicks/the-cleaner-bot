@@ -61,6 +61,18 @@ test('connected client is ready and HTTP methods/routes are restricted', async t
     assert.equal((await fetch(address(runtime), { method: 'HEAD' })).status, 200);
 });
 
+test('public status reports the selected storage provider and current readiness without connection credentials', async t => {
+    let storageStatus = 'starting';
+    const runtime = await startRuntime({ client: fakeClient(), token: '', host: '127.0.0.1', port: 0, logger,
+        getStorageStatus: () => ({ provider: 'MySQL', status: storageStatus }) });
+    t.after(() => runtime.stop());
+    assert.deepEqual((await (await fetch(address(runtime) + '/api/status')).json()).storage, { provider: 'MySQL', status: 'starting' });
+    storageStatus = 'ready';
+    const body = await (await fetch(address(runtime) + '/api/status')).text();
+    assert.deepEqual(JSON.parse(body).storage, { provider: 'MySQL', status: 'ready' });
+    assert.doesNotMatch(body, /password|connectionString|hostname|username/i);
+});
+
 test('the listener starts before Discord login is attempted', async t => {
     let runtime;
     let ready;
@@ -88,7 +100,7 @@ test('Hostinger-style CommonJS loading starts the real HTTP service without top-
     const directory = await mkdtemp(path.join(os.tmpdir(), 'cleaner-startup-'));
     const child = spawn(process.execPath, ['--input-type=commonjs', '-e', "require('./index.js')"], {
         cwd: fileURLToPath(new URL('..', import.meta.url)),
-        env: { ...process.env, DISCORD_TOKEN: '', Bot__DiscordBotToken: '', DATABASE_URL: '', MYSQL_URL: '', MYSQL_HOST: '', ConnectionStrings__BotDatabase: '', PORT: '0', DATA_DIRECTORY: directory },
+        env: { ...process.env, DISCORD_TOKEN: '', Bot__DiscordBotToken: '', BOT__DISCORDBOTTOKEN: '', DATABASE_URL: '', MYSQL_URL: '', MYSQL_HOST: '', ConnectionStrings__BotDatabase: '', CONNECTIONSTRINGS__BOTDATABASE: '', Database__Provider: '', DATABASE__PROVIDER: '', PORT: '0', DATA_DIRECTORY: directory },
         windowsHide: true
     });
     t.after(async () => {
@@ -121,6 +133,7 @@ test('Hostinger-style CommonJS loading starts the real HTTP service without top-
         await setTimeout(50);
     }
     assert.equal(status.discord.errorCode, 'token_missing');
+    assert.deepEqual(status.storage, { provider: 'Local file', status: 'ready' });
     const dashboard = await fetch(`http://127.0.0.1:${port}/Dashboard`);
     assert.equal(dashboard.status, 200);
     assert.match(await dashboard.text(), /The Cleaner dashboard/);

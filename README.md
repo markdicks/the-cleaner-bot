@@ -9,7 +9,7 @@ This repository now contains the **Node.js management application and Discord bo
 - Entry file: **index.js**. Build command: **none**. Start command if requested: **npm start**.
 - Keep the existing `DISCORD_TOKEN` environment variable. No token belongs in source control.
 - Set `PUBLIC_URL=https://thecleanerbot.space` (or your actual HTTPS origin).
-- Redeploy the latest commit. `/api/status` reports application version **2.1.0**.
+- Redeploy the latest commit. `/api/status` reports application version **2.1.1**, storage provider/status, and bot connection status. Credentials are never included.
 
 The entry remains synchronously loadable by Hostinger's CommonJS launcher. The HTTP listener starts before database initialization or Discord login; bad bot credentials do not terminate the website. No SDK downloads or extra child processes are started.
 
@@ -42,7 +42,9 @@ Alternatively configure `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` directly
 
 Configure the Hostinger runtime environment with `MYSQL_HOST`, `MYSQL_PORT` (default 3306), `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, and optionally `MYSQL_SSL=true` for TLS. `DATABASE_URL`/`MYSQL_URL` are also supported.
 
-The original .NET variable **`ConnectionStrings__BotDatabase`** is supported too. Its value must be the raw MySQL connection string, without a PowerShell assignment or outer quotes. Dollar signs are literal values in a hosting environment field. Prefer the separate `MYSQL_*` fields for passwords containing semicolons or quotes.
+The original .NET variable **`ConnectionStrings__BotDatabase`** and its all-uppercase Hostinger form **`CONNECTIONSTRINGS__BOTDATABASE`** are both supported. `Database__Provider` / `DATABASE__PROVIDER` also work. Linux environment keys are case-sensitive, so the application explicitly supports both spellings. An explicit MySQL/MariaDB provider without connection information produces a configuration error instead of silently using local files.
+
+The connection value must be the raw MySQL connection string, without a PowerShell assignment or outer quotes. Dollar signs are literal values in a hosting environment field. Prefer the separate `MYSQL_*` fields for passwords containing semicolons or quotes. Legacy Discord keys such as `Bot__DiscordClientSecret` also accept their all-uppercase forms, while remaining masked and environment-managed in Superadmin.
 
 The app creates a separate `CleanerDashboardState` table. It imports existing .NET server configuration, blocked words, moderation cases, levels, owner credentials, and recent audit history once, without dropping or changing the original tables. Updates use transactions and row locking. Original casino accounts and other .NET-specific tables remain untouched.
 
@@ -60,7 +62,7 @@ Old `DATA_DIRECTORY/botConfig.json` cleaning settings are imported once and scop
 - Business/Enterprise audit history, message content, search, CSV, 30-day retention. Server events are opt-in; Discord log delivery is capped at 10 messages per server per minute.
 - Chat XP and voice XP. Voice XP needs **2+ human members** in the same voice channel; muted users qualify, deafened users and bots do not.
 - Existing cleaning commands: `/current-interval`, `/add-bot`, `/remove-bot`, `/modify-interval`, `/configure`, `/set-log-channel`, `/add-monitor-channel`.
-- Additional `/dashboard`, `/warn`, `/timeout`, `/kick`, `/ban`, `/purge`, `/rank`, `/leaderboard`. The bot's Playing activity shows `version 2.1.0`.
+- Additional `/dashboard`, `/warn`, `/timeout`, `/kick`, `/ban`, `/purge`, `/rank`, `/leaderboard`. The bot's Playing activity shows `version 2.1.1`.
 
 Enable **Server Members Intent** and **Message Content Intent** in Discord's Developer Portal, then enable privileged intents and reconnect in Superadmin for content filtering and member welcome events. The app preserves the existing basic-intent connection by default; it displays filter availability accurately.
 

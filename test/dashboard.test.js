@@ -125,6 +125,21 @@ test('server channel settings persist and reject cross-server IDs', async t => {
     assert.equal((await store.read()).guilds[guildId].levelsChannelId, channelId);
 });
 
+test('uppercase legacy credentials remain environment-managed on the owner settings page', async t => {
+    const { request, session, store } = await fixture(t, { BOT__DISCORDCLIENTID: '123456789012345679', BOT__DISCORDCLIENTSECRET: 'uppercase-private-secret', BOT__DISCORDBOTTOKEN: 'uppercase-private-token' });
+    const owner = session();
+    const page = await (await request('/SuperAdmin', { headers: { cookie: owner.cookie } })).text();
+    assert.match(page, /Application \/ client ID \(environment\)/);
+    assert.match(page, /Client secret \(environment\)/);
+    assert.match(page, /Bot token \(environment\)/);
+    assert.doesNotMatch(page, /uppercase-private-secret|uppercase-private-token/);
+    await request('/SuperAdmin', { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, clientId: '123456789012345670', clientSecret: 'override', botToken: 'override' }) });
+    const state = await store.read();
+    assert.equal(state.settings.clientId, '123456789012345678');
+    assert.equal(state.settings.clientSecret, '');
+    assert.equal(state.settings.botToken, '');
+});
+
 test('moderation form invokes the bot only after confirmation and permission checks', async t => {
     const { request, session, calls } = await fixture(t);
     const owner = session();

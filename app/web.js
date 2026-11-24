@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PermissionsBitField } from 'discord.js';
+import { environmentCredentials } from './environment.js';
 import { businessActive, guildDefaults, snowflake, validateGuildSettings } from './settings.js';
 import { clearCookie, credentials, equalToken, publicOrigin, randomToken, readCookie, seal, secretKey, writeCookie } from './security.js';
 
@@ -174,16 +175,17 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
     });
     app.get('/SuperAdmin', administrator, (request, response) => response.render('admin', { settings: request.state.settings,
         configured: { token: Boolean(request.creds.token), secret: Boolean(request.creds.clientSecret), clientId: request.creds.clientId || bot.client?.user?.id || '', privilegedIntents: request.creds.privilegedIntents },
-        envManaged: { token: Boolean(env.DISCORD_TOKEN || env.Bot__DiscordBotToken), secret: Boolean(env.DISCORD_CLIENT_SECRET || env.Bot__DiscordClientSecret), clientId: Boolean(env.DISCORD_CLIENT_ID || env.Bot__DiscordClientId), privilegedIntents: env.DISCORD_PRIVILEGED_INTENTS !== undefined }, guilds: request.state.guilds, callbackUrl: `${request.origin}/Auth/Callback` }));
+        envManaged: { token: Boolean(environmentCredentials(env).token), secret: Boolean(environmentCredentials(env).clientSecret), clientId: Boolean(environmentCredentials(env).clientId), privilegedIntents: env.DISCORD_PRIVILEGED_INTENTS !== undefined }, guilds: request.state.guilds, callbackUrl: `${request.origin}/Auth/Callback` }));
     app.post('/SuperAdmin', administrator, async (request, response) => {
         const id = String(request.body.clientId || '').trim();
         const token = String(request.body.botToken || '').trim(); const secret = String(request.body.clientSecret || '').trim();
         if (id && !snowflake(id)) throw Object.assign(new Error('Enter a valid Discord application ID.'), { status: 400 });
         if (token.length > 500 || secret.length > 500) throw Object.assign(new Error('The supplied credential is too long.'), { status: 400 });
+        const managed = environmentCredentials(env);
         await store.update(state => {
-            if (!env.DISCORD_CLIENT_ID && !env.Bot__DiscordClientId) state.settings.clientId = id;
-            if (secret && !env.DISCORD_CLIENT_SECRET && !env.Bot__DiscordClientSecret) state.settings.clientSecret = seal(secret, request.key);
-            if (token && !env.DISCORD_TOKEN && !env.Bot__DiscordBotToken) state.settings.botToken = seal(token, request.key);
+            if (!managed.clientId) state.settings.clientId = id;
+            if (secret && !managed.clientSecret) state.settings.clientSecret = seal(secret, request.key);
+            if (token && !managed.token) state.settings.botToken = seal(token, request.key);
             if (env.DISCORD_PRIVILEGED_INTENTS === undefined) state.settings.privilegedIntents = request.body.privilegedIntents === 'on';
         });
         if (request.body.restart === 'on') void bot.restart().catch(error => logger.error(`Bot restart failed (${error.code || error.name}).`));

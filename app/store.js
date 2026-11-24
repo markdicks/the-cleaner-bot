@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { guildDefaults, SUPERADMIN_ID } from './settings.js';
 import { seal, secretKey } from './security.js';
+import { environmentValue } from './environment.js';
 
 export function parseConnectionString(raw) {
     if (/^\s*\$env:/i.test(raw) || /SetEnvironmentVariable/i.test(raw)) throw new Error('Use only the raw database connection string, not a PowerShell command.');
@@ -43,13 +44,31 @@ export function parseConnectionString(raw) {
 }
 
 export function databaseOptions(env) {
-    const raw = env.ConnectionStrings__BotDatabase;
-    if (raw && !/^\s*Data Source\s*=/i.test(raw)) return parseConnectionString(raw.trim().replace(/^(['"])(.*)\1$/, '$2'));
+    const raw = connectionStringValue(env);
+    if (raw && (!/^Data Source\s*=/i.test(raw) || isMySqlProvider(env))) return parseConnectionString(raw);
     if (env.DATABASE_URL || env.MYSQL_URL) return env.DATABASE_URL || env.MYSQL_URL;
-    if (!env.MYSQL_HOST) return null;
+    if (!env.MYSQL_HOST) {
+        if (isMySqlProvider(env)) {
+            throw Object.assign(new Error('Set CONNECTIONSTRINGS__BOTDATABASE or MYSQL_HOST, MYSQL_DATABASE, MYSQL_USER and MYSQL_PASSWORD.'), { code: 'DATABASE_CONFIGURATION_MISSING' });
+        }
+        return null;
+    }
     return { host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT || 3306), user: env.MYSQL_USER,
         password: env.MYSQL_PASSWORD || '', database: env.MYSQL_DATABASE,
         ...(env.MYSQL_SSL === 'true' ? { ssl: { rejectUnauthorized: true } } : {}) };
+}
+
+function connectionStringValue(env) {
+    return String(environmentValue(env, 'ConnectionStrings__BotDatabase') || '').trim().replace(/^(['"])(.*)\1$/, '$2').trim();
+}
+
+function isMySqlProvider(env) {
+    return ['mysql', 'mariadb'].includes(String(environmentValue(env, 'Database__Provider') || '').toLowerCase());
+}
+
+export function databaseMode(env) {
+    const raw = connectionStringValue(env);
+    return env.MYSQL_HOST || env.DATABASE_URL || env.MYSQL_URL || isMySqlProvider(env) || (raw && !/^\s*Data Source\s*=/i.test(raw)) ? 'MySQL' : 'Local file';
 }
 
 export function initialState() {
@@ -60,7 +79,7 @@ export function initialState() {
 export class AppStore {
     constructor({ env = process.env, directory = env.DATA_DIRECTORY || './database', logger = console } = {}) {
         this.env = env; this.directory = path.resolve(directory); this.logger = logger;
-        this.mode = env.MYSQL_HOST || env.DATABASE_URL || env.MYSQL_URL || (env.ConnectionStrings__BotDatabase && !/^\s*Data Source\s*=/i.test(env.ConnectionStrings__BotDatabase)) ? 'MySQL' : 'Local file';
+        this.mode = databaseMode(env);
         this.status = 'starting'; this.tail = Promise.resolve();
         this.ready = this.initialize();
         this.ready.catch(error => { this.status = 'unavailable'; logger.error(`Dashboard storage unavailable (${error.code || error.name}). Check database environment variables.`); });

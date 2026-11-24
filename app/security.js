@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { parse, serialize } from 'cookie';
+import { environmentCredentials } from './environment.js';
 
 export function seal(value, secret) {
     const nonce = randomBytes(12);
@@ -32,10 +33,11 @@ export function clearCookie(response, name, secure) {
 }
 export function credentials(state, env) {
     const key = secretKey(state, env);
+    const configured = environmentCredentials(env);
     return {
-        clientId: env.DISCORD_CLIENT_ID || env.Bot__DiscordClientId || state.settings.clientId,
-        clientSecret: env.DISCORD_CLIENT_SECRET || env.Bot__DiscordClientSecret || unseal(state.settings.clientSecret, key) || '',
-        token: env.DISCORD_TOKEN || env.Bot__DiscordBotToken || unseal(state.settings.botToken, key) || '',
+        clientId: configured.clientId || state.settings.clientId,
+        clientSecret: configured.clientSecret || unseal(state.settings.clientSecret, key) || '',
+        token: configured.token || unseal(state.settings.botToken, key) || '',
         superAdminId: env.SUPERADMIN_DISCORD_ID || state.settings.superAdminId,
         privilegedIntents: env.DISCORD_PRIVILEGED_INTENTS !== undefined ? env.DISCORD_PRIVILEGED_INTENTS === 'true' : state.settings.privilegedIntents
     };
