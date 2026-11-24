@@ -1,0 +1,7 @@
+<%- include('partials/head', { title: 'Dashboard' }) %>
+<section class="page-heading"><div><p class="eyebrow">Server management</p><h1>The Cleaner dashboard</h1></div><span class="badge <%= status.discord.connected ? 'success' : 'warning' %>"><%= status.discord.connected ? 'Bot connected' : 'Bot offline' %></span></section>
+<section class="sign-in"><img src="/assets/mark.svg" width="64" height="64" alt="The Cleaner"><h2>Sign in to your servers</h2><p>Discord account</p>
+<% if (oauthConfigured) { %><a class="button primary" href="/Auth/Login"><i data-lucide="log-in"></i>Continue with Discord</a>
+<% } else { %><div class="notice warning"><i data-lucide="key-round"></i><div><strong>Discord sign-in needs configuration</strong><p>Owner access is available through the private <code>/dashboard</code> command in Discord.</p></div></div><% } %>
+<a class="quiet-link" href="/service">View service status</a></section>
+<%- include('partials/foot') %>

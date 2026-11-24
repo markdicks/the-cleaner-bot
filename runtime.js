@@ -9,7 +9,7 @@ export function normalizeToken(value) {
     return token;
 }
 
-export async function startRuntime({ client, token, port = process.env.PORT || 3000, host = '0.0.0.0', version, logger = console }) {
+export async function startRuntime({ client, token, port = process.env.PORT || 3000, host = '0.0.0.0', version, logger = console, createHandler }) {
     const listenPort = Number(port);
     if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
         throw new Error('PORT must be a valid TCP port number.');
@@ -29,6 +29,7 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
         }
     });
 
+    const handler = createHandler?.(getStatus);
     const server = createServer((request, response) => {
         let pathname;
         try {
@@ -41,6 +42,10 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
         response.setHeader('Cache-Control', 'no-store');
         response.setHeader('X-Content-Type-Options', 'nosniff');
         response.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
+        if (handler && !['/health', '/api/status', '/ready'].includes(pathname)) {
+            handler(request, response);
+            return;
+        }
         if (!['GET', 'HEAD'].includes(request.method)) {
             response.writeHead(405, { Allow: 'GET, HEAD' });
             response.end();
@@ -49,7 +54,7 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
 
         const status = getStatus();
         let body;
-        if (pathname === '/' || pathname === '/index.html') {
+        if (['/', '/index.html', '/service'].includes(pathname)) {
             response.setHeader('Content-Type', 'text/html; charset=utf-8');
             body = renderStatus(status);
         } else if (['/health', '/api/status', '/ready'].includes(pathname)) {
@@ -73,7 +78,7 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
     });
     logger.log(`HTTP service listening on port ${server.address().port}.`);
 
-    const normalizedToken = normalizeToken(token);
+    const normalizedToken = normalizeToken(typeof token === 'function' ? await Promise.resolve().then(token).catch(() => '') : token);
     if (!normalizedToken) {
         discordStatus = 'configuration_required';
         errorCode = 'token_missing';

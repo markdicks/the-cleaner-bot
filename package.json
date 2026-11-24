@@ -1,18 +1,23 @@
 {
     "name": "the-cleaner-bot",
-    "version": "1.0.2",
-    "description": "A Discord bot to clean messages from other bots.",
+    "version": "2.1.0",
+    "description": "Discord moderation and cleaning bot with a Hostinger-compatible management dashboard.",
     "main": "index.js",
     "type": "module",
     "scripts": {
         "start": "node index.js",
-        "test": "node --test --test-timeout=15000"
+        "test": "node --test --test-timeout=30000"
     },
     "engines": {
         "node": ">=22"
     },
     "dependencies": {
         "discord.js": "^14.0.0",
-        "dotenv": "^10.0.0"
+        "dotenv": "^10.0.0",
+        "express": "^5.1.0",
+        "ejs": "^3.1.10",
+        "cookie": "^1.0.2",
+        "mysql2": "^3.14.0",
+        "lucide": "^0.468.0"
     }
 }

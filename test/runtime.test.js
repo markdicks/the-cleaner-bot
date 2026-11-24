@@ -88,7 +88,7 @@ test('Hostinger-style CommonJS loading starts the real HTTP service without top-
     const directory = await mkdtemp(path.join(os.tmpdir(), 'cleaner-startup-'));
     const child = spawn(process.execPath, ['--input-type=commonjs', '-e', "require('./index.js')"], {
         cwd: fileURLToPath(new URL('..', import.meta.url)),
-        env: { ...process.env, DISCORD_TOKEN: '', PORT: '0', DATA_DIRECTORY: directory },
+        env: { ...process.env, DISCORD_TOKEN: '', Bot__DiscordBotToken: '', DATABASE_URL: '', MYSQL_URL: '', MYSQL_HOST: '', ConnectionStrings__BotDatabase: '', PORT: '0', DATA_DIRECTORY: directory },
         windowsHide: true
     });
     t.after(async () => {
@@ -112,8 +112,17 @@ test('Hostinger-style CommonJS loading starts the real HTTP service without top-
             if (match) resolve(Number(match[1]));
         });
     });
-    const response = await fetch(`http://127.0.0.1:${port}/api/status`);
-    assert.equal(response.status, 200);
-    assert.equal((await response.json()).discord.errorCode, 'token_missing');
+    let status;
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const response = await fetch(`http://127.0.0.1:${port}/api/status`);
+        assert.equal(response.status, 200);
+        status = await response.json();
+        if (status.discord.errorCode) break;
+        await setTimeout(50);
+    }
+    assert.equal(status.discord.errorCode, 'token_missing');
+    const dashboard = await fetch(`http://127.0.0.1:${port}/Dashboard`);
+    assert.equal(dashboard.status, 200);
+    assert.match(await dashboard.text(), /The Cleaner dashboard/);
     assert.ok(!errors.includes('ERR_REQUIRE_ASYNC_MODULE'));
 });
