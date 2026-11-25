@@ -9,6 +9,7 @@ import { GatewayConnection } from './connection.js';
 import { LogDelivery } from './logging.js';
 import { channelAuditEvent } from './channel-audit.js';
 import { claimEvent, digest, messageEditFields, messagePresentation, messageSnapshot, messageText, roleAuditEvent } from './audit-events.js';
+import { handleLookup, lookupCommand } from './punishment-history.js';
 
 const manage = PermissionsBitField.Flags.ManageGuild;
 const option = (name, description, type, required = false) => ({ name, description, type, required });
@@ -23,6 +24,7 @@ const commands = [
     { name: 'add-monitor-channel', description: 'Add a cleaning channel', options: [option('channel', 'Text channel', 7, true)] },
     ...['warn', 'timeout', 'kick', 'ban'].map(name => ({ name, description: `${name[0].toUpperCase() + name.slice(1)} a member`, options: [option('user', 'Member', 6, true), option('reason', 'Reason', 3, true), ...(name === 'timeout' ? [option('minutes', 'Timeout duration', 4)] : [])] })),
     { name: 'purge', description: 'Delete matching recent messages', options: [option('count', 'Messages to inspect, up to 1000', 4, true), option('user', 'Only this member', 6), option('role', 'Only members with this role', 8), option('bots', 'Only bot messages', 5), option('contains', 'Only messages containing text', 3)] },
+    lookupCommand,
     { name: 'rank', description: 'Show your XP and level' },
     { name: 'leaderboard', description: 'Show this server\'s XP leaders' }
 ];
@@ -165,6 +167,7 @@ export class BotController {
         return !write && oauthGuilds.includes(guildId);
     }
     async onInteraction(interaction) {
+        if (interaction.isButton() && interaction.customId.startsWith('lookup:')) return handleLookup(this, interaction);
         if (interaction.isButton() && interaction.customId.startsWith('audit:user:')) {
             const [, , guildId, userId] = interaction.customId.split(':');
             if (interaction.guildId !== guildId || interaction.message?.author?.id !== this.client?.user?.id || !snowflake(userId)) return interaction.reply({ content: 'This log button is not valid for this server.', flags: 64 });
@@ -176,6 +179,7 @@ export class BotController {
             return;
         }
         if (!interaction.isChatInputCommand() || !interaction.guildId) return;
+        if (interaction.commandName === 'lookup') return handleLookup(this, interaction);
         await interaction.deferReply({ flags: 64 });
         try {
             const state = await this.store.read();

@@ -9,7 +9,7 @@ This repository now contains the **Node.js management application and Discord bo
 - Entry file: **index.js**. Build command: **none**. Start command if requested: **npm start**.
 - Keep the existing `DISCORD_TOKEN` environment variable. No token belongs in source control.
 - Set `PUBLIC_URL=https://thecleanerbot.space` (or your actual HTTPS origin).
-- Redeploy the latest commit. `/api/status` reports application version **2.2.1**, storage provider/status, and bot connection diagnostics. Credentials are never included.
+- Redeploy the latest commit. `/api/status` reports application version **2.3.0**, storage provider/status, and bot connection diagnostics. Credentials are never included.
 
 The entry remains synchronously loadable by Hostinger's CommonJS launcher. The HTTP listener starts before database initialization or Discord login; bad bot credentials do not terminate the website. No SDK downloads or extra child processes are started.
 
@@ -62,7 +62,16 @@ Old `DATA_DIRECTORY/botConfig.json` cleaning settings are imported once and scop
 - Business/Enterprise audit history, message content, search, CSV, 30-day retention. Server events are opt-in; Discord log delivery is capped at 10 messages per server per minute.
 - Chat XP and voice XP. Voice XP needs **2+ human members** in the same voice channel; muted users qualify, deafened users and bots do not.
 - Existing cleaning commands: `/current-interval`, `/add-bot`, `/remove-bot`, `/modify-interval`, `/configure`, `/set-log-channel`, `/add-monitor-channel`.
-- Additional `/dashboard`, `/warn`, `/timeout`, `/kick`, `/ban`, `/purge`, `/rank`, `/leaderboard`. The bot's Playing activity shows `version 2.2.1`.
+- Additional `/dashboard`, `/warn`, `/timeout`, `/kick`, `/ban`, `/purge`, `/lookup`, `/rank`, `/leaderboard`. The bot's Playing activity shows `version 2.3.0`.
+
+## Punishment History Lookup
+
+- Use **`/lookup user:@person`** or **`/lookup user-id:123456789012345678`**. Supply exactly one target. The ID option also works for people who left the server or were banned. An optional **`page`** number jumps to older cases.
+- Results are **ephemeral**, visible only to the requesting moderator. Each case shows its number, action, full date/time, moderator mention and ID, and reason. Four cases are shown per page, newest first. Timeout/mute removals and unbans remain in history as reversals, not active punishments.
+- **Previous / Next** update the same private panel. New cases do not shift a panel's page boundaries. Buttons are tied to the requesting moderator and server, survive bot restarts, and recheck current permissions on every click.
+- **Download history** returns all cases in that lookup as a private text attachment, including complete original reasons and UTC dates. Large exports are compressed losslessly; exports that still exceed Discord's attachment limit return an error rather than silently omitting records. Every case remains accessible through pagination.
+- The command defaults to Discord's **Moderate Members** permission. Runtime access accepts **Moderate Members** or **Manage Server**, the server owner, or the configured superadmin. Server administrators can adjust command availability under Discord **Server Settings > Integrations**. Permission overrides never bypass the runtime checks. No paid plan is required.
+- Lookups are restricted to the current server and read only recorded case history, including imported legacy cases, bot-issued actions, and native actions the bot observed while enabled. They cannot reconstruct unrecorded punishments, other bots' private warning databases, or records already removed before this release. Case history no longer silently discards records after 20,000 entries; the separate 30-day audit-event retention is unchanged.
 
 Enable **Server Members Intent** and **Message Content Intent** in Discord's Developer Portal, then enable privileged intents in Superadmin for content filtering and member welcome events. Saving a changed token or intent setting automatically reconnects the bot. The app preserves the existing basic-intent connection by default; it displays filter availability accurately.
 

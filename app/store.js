@@ -160,7 +160,6 @@ export class AppStore {
 function trimHistory(state) {
     const since = Date.now() - 30 * 86400000;
     state.audit = state.audit.filter(entry => Date.parse(entry.createdAt) >= since).slice(-10000);
-    state.cases = state.cases.slice(-20000);
     for (const [key, expires] of Object.entries(state.suppressedDeletions || {})) if (expires <= Date.now()) delete state.suppressedDeletions[key];
 }
 
@@ -189,7 +188,7 @@ async function importDotNet(connection, state, env) {
         state.audit = entries.reverse().map(row => ({ guildId: String(row.GuildId), category: row.Category === 'Moderation' ? 'moderation' : row.Category === 'AutoMod' ? 'automod' : 'server',
             eventType: row.EventType, title: row.Summary, details: row.Details, targetUserId: row.SubjectId, moderatorUserId: row.ActorId, channelId: row.ChannelId, createdAt: new Date(Number(row.CreatedAtUnixSeconds) * 1000).toISOString() }));
     }
-    state.nextCaseId = Math.max(0, ...state.cases.map(entry => entry.id)) + 1;
+    state.nextCaseId = state.cases.reduce((latest, entry) => Math.max(latest, entry.id), 0) + 1;
     const [legacy] = await load('BotSettings');
     if (legacy) {
         state.settings.superAdminId = legacy.SuperAdminDiscordUserId || SUPERADMIN_ID;
