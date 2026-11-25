@@ -1,0 +1,16 @@
+<section class="section log-diagnostics">
+    <div class="section-heading"><h2>Log channel connection</h2><a href="?tab=logs">Refresh checks</a></div>
+    <% for (const check of logChecks) { %>
+    <article class="log-check">
+        <div class="log-check-heading"><h3><%= check.label %></h3><span class="badge <%= check.ok && !check.lastFailure ? 'success' : 'warning' %>"><%= check.lastFailure ? 'Delivery failed' : check.status === 'ready' ? 'Ready' : check.status === 'warning' ? 'Text-only' : 'Action required' %></span></div>
+        <p><%= check.message %></p>
+        <% if (check.action) { %><p class="muted"><%= check.action %></p><% } %>
+        <% if (check.observationWarning) { %><p class="text-warning"><%= check.observationWarning %></p><% } %>
+        <% if (check.lastFailure) { %><p class="text-warning"><%= check.lastFailure %></p><% } %>
+        <div class="log-check-footer">
+            <span class="muted"><% if (check.lastSuccessAt) { %>Last delivered: <time datetime="<%= check.lastSuccessAt %>"><%= new Date(check.lastSuccessAt).toLocaleString('en-GB', { timeZone: 'UTC' }) %> UTC</time><% } else { %>No delivery confirmed this session<% } %></span>
+            <form method="post" action="/Dashboard/Guild/<%= guild.guildId %>/test-log"><input type="hidden" name="csrf" value="<%= csrf %>"><input type="hidden" name="category" value="<%= check.category %>"><button class="button secondary" <%= check.canTest ? '' : 'disabled' %>><i data-lucide="send"></i>Send test log</button></form>
+        </div>
+    </article>
+    <% } %>
+</section>

@@ -14,7 +14,7 @@ export function guildDefaults(id, name = id) {
         levelsChannelId: '1246174778281300048', logChannelId: '', welcomeChannelId: '',
         welcomeMessage: 'Welcome {user} to {server}.', goodbyeMessage: '{user} left {server}.',
         ignoredModerationChannelIds: [], blockedWords: [],
-        auditLogs: { enabled: true, moderationChannelId: '1574428730997084240', autoModChannelId: '1574423826417193091',
+        auditLogs: { enabled: true, moderationActions: true, autoModActions: true, moderationChannelId: '1574428730997084240', autoModChannelId: '1574423826417193091',
             serverChannelId: '', sendServerEventsToDiscord: false, messageEdits: false, messageDeletes: false,
             memberChanges: false, voiceChanges: false, serverChanges: false, includeMessageContent: true },
         cleaner: { botList: [], allowedRoles: [], monitorChannels: [], logChannelId: '', intervalMinutes: 60 },
@@ -51,7 +51,7 @@ export function validateGuildSettings(body, current, channels) {
     } else if (body.section === 'logs') {
         if (!businessActive(current)) throw new Error('Business or Enterprise is required for audit log settings.');
         for (const key of ['moderationChannelId', 'autoModChannelId', 'serverChannelId']) next.auditLogs[key] = checkChannel(body[key]);
-        for (const key of ['enabled', 'sendServerEventsToDiscord', 'messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'includeMessageContent']) next.auditLogs[key] = body[key] === 'on';
+        for (const key of ['enabled', 'moderationActions', 'autoModActions', 'sendServerEventsToDiscord', 'messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'includeMessageContent']) next.auditLogs[key] = body[key] === 'on';
     } else if (body.section === 'cleaner') {
         const interval = Number(body.intervalMinutes);
         if (!Number.isInteger(interval) || interval < 1 || interval > 120960) throw new Error('Cleaning interval must be between 1 and 120,960 minutes.');

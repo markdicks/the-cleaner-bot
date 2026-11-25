@@ -1,0 +1,31 @@
+[hidden] { display: none !important; }
+.connection-panel {
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 24px;
+    margin-bottom: 28px;
+}
+.connection-panel h2 { display: flex; align-items: center; gap: 10px; }
+.connection-panel .section-heading { margin-bottom: 12px; }
+.connection-panel p { font-size: 14px; color: var(--muted); margin-bottom: 12px; }
+.connection-panel ol { margin: 12px 0 18px; padding-left: 22px; max-width: 900px; }
+.connection-panel li { padding: 3px 0; font-size: 14px; overflow-wrap: anywhere; }
+.connection-panel .button-row:empty { display: none; }
+.log-check { border-bottom: 1px solid var(--border); padding: 20px 0; }
+.log-check-heading, .log-check-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.log-check-heading { margin-bottom: 10px; }
+.log-check p { font-size: 14px; margin-bottom: 8px; overflow-wrap: anywhere; }
+.log-check h3 { margin: 0; }
+.log-check-footer { margin-top: 16px; }
+.log-check-footer .muted { font-size: 12px; }
+.log-check-footer form { flex: none; }
+.button:disabled { cursor: not-allowed; }
+@media (max-width: 600px) {
+    .connection-panel .button-row { align-items: stretch; }
+    .connection-panel .button-row > a, .connection-panel .button-row > form { width: 100%; }
+    .connection-panel form button { width: 100%; }
+    .log-check-heading { align-items: flex-start; }
+    .log-check-heading h3 { min-width: 0; }
+    .log-check-heading .badge { flex: none; }
+    .log-check-footer { align-items: stretch; flex-direction: column; }
+    .log-check-footer .button { width: 100%; }
+}

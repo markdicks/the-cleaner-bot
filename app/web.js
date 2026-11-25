@@ -132,15 +132,26 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
         guilds.sort((a, b) => a.name.localeCompare(b.name));
         response.render('dashboard', { guilds, cases: request.state.cases.filter(entry => guilds.some(guild => guild.id === entry.guildId)).slice(-8).reverse(), contentAccess: bot.contentAccess });
     });
-    app.get('/Dashboard/Guild/:guildId', guildAccess, (request, response) => {
+    app.get('/Dashboard/Guild/:guildId', guildAccess, async (request, response) => {
         const validTabs = ['overview', 'moderation', 'channels', 'logs', 'cleaner', 'cases', 'levels'];
         const tab = validTabs.includes(request.query.tab) ? request.query.tab : 'overview';
-        response.render('guild', { tab, contentAccess: bot.contentAccess,
+        response.render('guild', { tab, contentAccess: bot.contentAccess, logChecks: tab === 'logs' ? await bot.loggingDiagnostics(request.params.guildId, request.config) : [],
             cases: request.state.cases.filter(entry => entry.guildId === request.params.guildId).slice(-100).reverse(),
             levels: Object.values(request.state.levels).filter(entry => entry.guildId === request.params.guildId).sort((a, b) => b.xp - a.xp).slice(0, 100) });
     });
+    app.get('/Dashboard/Guild/:guildId/diagnostics', guildAccess, async (request, response) => {
+        response.json({ connection: getStatus().discord, logs: await bot.loggingDiagnostics(request.params.guildId, request.config) });
+    });
+    app.post('/Dashboard/Guild/:guildId/test-log', guildAccess, async (request, response) => {
+        if (!['moderation', 'automod', 'server'].includes(request.body.category)) throw Object.assign(new Error('Select a valid log category.'), { status: 400 });
+        if (request.body.category !== 'moderation' && !businessActive(request.config)) throw Object.assign(new Error('Business or Enterprise is required for this log category.'), { status: 403 });
+        const result = await bot.testLog(request.params.guildId, request.body.category);
+        const message = [result.message, result.ok ? '' : result.action].filter(Boolean).join(' ').slice(0, 500);
+        response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=logs&message=${encodeURIComponent(message)}`);
+    });
     app.post('/Dashboard/Guild/:guildId', guildAccess, async (request, response) => {
         try {
+            if (!request.channels.length && ['channels', 'cleaner', 'logs'].includes(request.body.section)) throw new Error('Reconnect the bot and restore channel access before changing channel settings. Existing settings were retained.');
             await store.update(state => { state.guilds[request.params.guildId] = validateGuildSettings(request.body, state.guilds[request.params.guildId] || request.config, request.channels); });
             response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=${encodeURIComponent(request.body.section)}&message=Settings%20saved.`);
         } catch (error) { response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=${encodeURIComponent(request.body.section || 'overview')}&message=${encodeURIComponent(error.message.slice(0, 300))}`); }
@@ -188,8 +199,14 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
             if (token && !managed.token) state.settings.botToken = seal(token, request.key);
             if (env.DISCORD_PRIVILEGED_INTENTS === undefined) state.settings.privilegedIntents = request.body.privilegedIntents === 'on';
         });
-        if (request.body.restart === 'on') void bot.restart().catch(error => logger.error(`Bot restart failed (${error.code || error.name}).`));
-        response.redirect('/SuperAdmin?message=Settings%20saved.');
+        const saved = credentials(await store.read(), env);
+        const reconnect = request.body.restart === 'on' || saved.privilegedIntents !== request.creds.privilegedIntents || saved.token !== request.creds.token;
+        if (reconnect) void bot.restart().catch(error => logger.error(`Bot restart failed (${error.code || error.name}).`));
+        response.redirect(`/SuperAdmin?message=${encodeURIComponent(reconnect ? 'Settings saved. Reconnecting the bot; connection status updates below.' : 'Settings saved.')}`);
+    });
+    app.post('/SuperAdmin/reconnect', administrator, (request, response) => {
+        void bot.restart().catch(error => logger.error(`Bot restart failed (${error.code || error.name}).`));
+        response.redirect('/SuperAdmin?message=Reconnecting%20the%20bot.%20Connection%20status%20updates%20below.');
     });
     app.post('/SuperAdmin/plan', administrator, async (request, response) => {
         const id = String(request.body.guildId || '');

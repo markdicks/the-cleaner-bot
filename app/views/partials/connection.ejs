@@ -1,0 +1,13 @@
+<% const connection = status.discord; const action = connection.action; %>
+<section class="connection-panel" data-connection-panel aria-live="polite">
+    <div class="section-heading">
+        <h2><i data-lucide="plug-zap"></i>Discord connection</h2>
+        <span data-connection-badge class="badge <%= connection.connected && !action ? 'success' : 'warning' %>"><%= connection.connected ? action ? 'Online - limited' : 'Connected' : connection.reconnecting || ['starting','connecting','reconnecting'].includes(connection.status) ? 'Connecting' : 'Action required' %></span>
+    </div>
+    <p data-connection-message><%= action?.title || (connection.connected ? 'Connected to Discord.' : connection.reconnecting || ['starting','connecting','reconnecting'].includes(connection.status) ? 'Connecting to Discord. Status updates automatically.' : 'The bot is not connected. Review its settings and reconnect.') %></p>
+    <ol data-connection-steps <%= action?.steps?.length ? '' : 'hidden' %>><% for (const step of action?.steps || []) { %><li><%= step %></li><% } %></ol>
+    <div class="button-row">
+        <a data-connection-action class="button secondary" href="<%= action?.url || '/SuperAdmin' %>" <%= action ? '' : 'hidden' %> <%- action?.url?.startsWith('https://discord.com/') ? 'target="_blank" rel="noopener noreferrer"' : '' %>><i data-lucide="external-link"></i><span data-connection-action-label><%= action?.code === 'intents_required' ? 'Open Developer Portal' : 'Connection settings' %></span></a>
+        <% if (superAdmin) { %><form method="post" action="/SuperAdmin/reconnect"><input type="hidden" name="csrf" value="<%= csrf %>"><button class="button primary" data-reconnect-button <%= connection.reconnecting ? 'disabled' : '' %>><i data-lucide="refresh-cw"></i>Reconnect bot</button></form><% } %>
+    </div>
+</section>

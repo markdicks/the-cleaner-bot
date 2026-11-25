@@ -1,5 +1,5 @@
 // Local, isolated UI fixture. Never used by the production index.js entry point.
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { AppStore } from '../app/store.js';
@@ -7,9 +7,11 @@ import { BotController } from '../app/bot.js';
 import { createDashboard } from '../app/web.js';
 import { guildDefaults, SUPERADMIN_ID } from '../app/settings.js';
 import { startRuntime } from '../runtime.js';
+import { connectionAction } from '../app/connection.js';
 
 const directory = await mkdtemp(path.join(os.tmpdir(), 'cleaner-ui-preview-'));
 const store = new AppStore({ env: {}, directory });
+const version = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 await store.ready;
 const guildId = '1505183872705363998';
 const guilds = [
@@ -24,14 +26,23 @@ await store.update(state => {
     state.cases = [{ id: 1, guildId, action: 'warn', targetUserTag: 'Example member', reason: 'Message spam', createdAt: new Date().toISOString() }];
     state.nextCaseId = 2;
 });
-const bot = new BotController({ store, env: {}, version: '2.1.0' });
-bot.isReady = () => true;
+const bot = new BotController({ store, env: {}, version });
+let connected = false;
+bot.isReady = () => connected;
+bot.getConnectionStatus = () => ({ connected, status: connected ? 'connected' : 'action_required', errorCode: connected ? null : 'intents_required', action: connected ? null : connectionAction('intents_required'), privilegedActive: connected, reconnecting: false });
+bot.restart = async () => { connected = true; };
 bot.guilds = () => guilds;
 bot.channels = () => [{ id: '1574423826417193091', name: 'flagged-messages', text: true }, { id: '1574428730997084240', name: 'moderation-log', text: true }, { id: '1246174778281300048', name: 'levels', text: true }];
 bot.canManage = async () => true;
 bot.login = async () => {};
 bot.moderate = async () => { throw new Error('This local UI fixture has no Discord connection.'); };
-const runtime = await startRuntime({ client: bot, token: '', port: 0, host: '127.0.0.1', version: '2.1.0', createHandler: getStatus => createDashboard({ store, bot, version: '2.1.0', env: {}, getStatus }) });
+bot.loggingDiagnostics = async () => [
+    { category: 'moderation', label: 'Moderation actions', ok: false, status: 'blocked', message: 'Missing permissions: Send Messages.', action: 'Open this channel > Edit Channel > Permissions, and allow Send Messages for the bot role.', canTest: false },
+    { category: 'automod', label: 'Flagged words & links', ok: true, status: 'ready', message: 'Ready to send to #flagged-messages.', canTest: true },
+    { category: 'server', label: 'Server events', ok: false, status: 'blocked', message: 'Discord delivery is disabled.', action: 'Enable Send server events to Discord.', canTest: false }
+];
+bot.testLog = async () => ({ ok: false, message: 'This isolated preview does not send Discord messages.', action: '' });
+const runtime = await startRuntime({ client: bot, token: '', port: 0, host: '127.0.0.1', version, createHandler: getStatus => createDashboard({ store, bot, version, env: {}, getStatus }) });
 const origin = `http://127.0.0.1:${runtime.server.address().port}`;
 console.log(`UI_PREVIEW=${bot.createSetupLink(SUPERADMIN_ID, origin)}`);
 console.log(`UI_ORIGIN=${origin}`);

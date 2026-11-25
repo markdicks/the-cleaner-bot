@@ -6,6 +6,7 @@
     <title><%= title %> | The Cleaner</title>
     <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/assets/app.css?v=<%= version %>">
+    <link rel="stylesheet" href="/assets/diagnostics.css?v=<%= version %>">
     <script src="/assets/lucide.js?v=<%= version %>" defer></script>
     <script src="/assets/app.js?v=<%= version %>" defer></script>
 </head>
@@ -17,7 +18,7 @@
         <% if (superAdmin) { %><a class="nav-link <%= path === '/SuperAdmin' ? 'active' : '' %>" href="/SuperAdmin"><i data-lucide="shield-check"></i>Superadmin</a><% } %>
         <a class="nav-link <%= ['/service','/Service','/status'].includes(path) ? 'active' : '' %>" href="/service"><i data-lucide="activity"></i>Service status</a>
     </nav>
-    <div class="sidebar-bottom"><span class="badge <%= status.discord.connected ? 'success' : 'warning' %>"><%= status.discord.connected ? 'Bot online' : 'Bot offline' %></span><small>Version <%= version %></small></div>
+    <div class="sidebar-bottom"><span data-bot-status class="badge <%= status.discord.connected ? 'success' : 'warning' %>"><%= status.discord.connected ? 'Bot online' : 'Bot offline' %></span><small>Version <%= version %></small></div>
 </aside>
 <div class="workspace">
     <header class="topbar">

@@ -1,12 +1,14 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { Client, GatewayIntentBits, IntentsBitField, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { AuditLogEvent, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { credentials, randomToken } from './security.js';
 import { businessActive, guildDefaults, snowflake } from './settings.js';
 import { normalizeToken } from '../runtime.js';
+import { GatewayConnection } from './connection.js';
+import { LogDelivery } from './logging.js';
 
 const manage = PermissionsBitField.Flags.ManageGuild;
-const basicIntents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildModeration];
 const option = (name, description, type, required = false) => ({ name, description, type, required });
 const commands = [
     { name: 'dashboard', description: 'Open the server dashboard or securely configure sign-in' },
@@ -44,82 +46,83 @@ export function findViolation(message, config, recent = []) {
 }
 
 export class BotController {
-    constructor({ store, env = process.env, version, logger = console }) {
+    constructor({ store, env = process.env, version, logger = console, createClient, readyTimeoutMs }) {
         this.store = store; this.env = env; this.version = version; this.logger = logger;
-        this.client = new Client({ intents: basicIntents });
-        this.pendingSetups = new Map(); this.windows = new Map(); this.voiceSince = new Map(); this.cleaningRuns = new Map(); this.logWindows = new Map();
-        this.contentAccess = false; this.origin = env.PUBLIC_URL || ''; this.maintenanceBusy = false;
-        this.client.on('clientReady', () => { void this.onReady().catch(error => this.report('Startup', error)); });
-        this.client.on('interactionCreate', interaction => { void this.onInteraction(interaction).catch(error => this.report('Interaction', error)); });
-        this.client.on('messageCreate', message => { void this.onMessage(message).catch(error => this.report('Message', error)); });
-        this.client.on('messageUpdate', (before, after) => { if (before.content !== after.content && after.guild && !after.author?.bot) void this.onMessage(after, true).catch(error => this.report('Message edit', error)); });
-        this.client.on('messageDelete', message => { if (message.guild && !message.author?.bot) void this.serverEvent(message.guild.id, 'messageDeletes', 'Message deleted', message.content || '(not cached)', message.channelId).catch(error => this.report('Deletion log', error)); });
-        this.client.on('guildMemberAdd', member => { void this.memberChange(member, true).catch(error => this.report('Member join', error)); });
-        this.client.on('guildMemberRemove', member => { void this.memberChange(member, false).catch(error => this.report('Member leave', error)); });
-        this.client.on('guildUpdate', (before, after) => { if (before.name !== after.name) void this.serverEvent(after.id, 'serverChanges', 'Server renamed', `${before.name} -> ${after.name}`).catch(error => this.report('Server log', error)); });
-        this.client.on('voiceStateUpdate', (before, after) => {
+        this.pendingSetups = new Map(); this.windows = new Map(); this.voiceSince = new Map(); this.cleaningRuns = new Map();
+        this.origin = env.PUBLIC_URL || ''; this.maintenanceBusy = false;
+        this.nativeEvents = new Map();
+        this.connection = new GatewayConnection({ createClient, readyTimeoutMs, logger, bindClient: client => this.bindClient(client) });
+        this.logDelivery = new LogDelivery({ getClient: () => this.client, isReady: () => this.isReady(), logger });
+    }
+    get client() { return this.connection.client; }
+    get contentAccess() { return this.connection.getStatus().privilegedActive; }
+    getConnectionStatus() { return this.connection.getStatus(); }
+    bindClient(client) {
+        const on = (event, handler) => client.on(event, (...args) => {
+            if (this.client !== client || this.connection.activeClient !== client || this.connection.closing) return;
+            void Promise.resolve().then(() => { if (this.client === client && this.connection.activeClient === client && !this.connection.closing) return handler(...args); }).catch(error => this.report(event, error));
+        });
+        on('clientReady', () => this.onReady(client));
+        on('interactionCreate', interaction => this.onInteraction(interaction));
+        on('messageCreate', message => this.onMessage(message));
+        on('messageUpdate', (before, after) => { if (before.content !== after.content && after.guild && !after.author?.bot) return this.onMessage(after, true); });
+        on('messageDelete', message => { if (message.guild && !message.author?.bot) return this.serverEvent(message.guild.id, 'messageDeletes', 'Message deleted', message.content || '(not cached)', message.channelId); });
+        on('guildMemberAdd', member => this.memberChange(member, true));
+        on('guildMemberRemove', member => this.memberChange(member, false));
+        on('guildUpdate', (before, after) => { if (before.name !== after.name) return this.serverEvent(after.id, 'serverChanges', 'Server renamed', `${before.name} -> ${after.name}`); });
+        on('guildAuditLogEntryCreate', (entry, guild) => this.nativeModeration(entry, guild));
+        on('autoModerationActionExecution', execution => this.nativeAutoMod(execution));
+        on('voiceStateUpdate', (before, after) => {
             if (before.channelId !== after.channelId || after.deaf) this.voiceSince.delete(`${after.guild.id}:${after.id}`);
             for (const channel of [before.channel, after.channel]) if (channel && !voiceEligibleMembers(channel).length) for (const member of channel.members.values()) this.voiceSince.delete(`${after.guild.id}:${member.id}`);
             if (before.channelId !== after.channelId) void this.serverEvent(after.guild.id, 'voiceChanges', 'Voice channel changed', `<@${after.id}>: ${before.channel?.name || 'disconnected'} -> ${after.channel?.name || 'disconnected'}`).catch(error => this.report('Voice log', error));
         });
-        this.client.on('error', error => this.report('Discord', error));
-        this.client.on('shardDisconnect', event => {
-            if (event.code === 4014 && this.contentAccess && !this.fallingBack) {
-                this.fallingBack = true;
-                this.contentAccess = false;
-                this.report('Privileged intents rejected; reconnecting with basic intents', { code: 'INTENTS_REQUIRED' });
-                void this.restart(false).catch(error => this.report('Reconnect', error)).finally(() => { this.fallingBack = false; });
-            }
-        });
+        on('error', error => this.report('Discord', error));
     }
     report(area, error) { this.logger.error(`${area}: ${error.code || error.name || 'failed'}`); }
-    isReady() { return this.client.isReady(); }
+    isReady() { return this.client?.isReady() || false; }
     async getToken() { return credentials(await this.store.read(), this.env).token; }
     async login(token) {
         const config = credentials(await this.store.read(), this.env);
-        this.contentAccess = config.privilegedIntents;
-        this.client.options.intents = new IntentsBitField([...basicIntents, ...(this.contentAccess ? [GatewayIntentBits.GuildMembers, GatewayIntentBits.MessageContent] : [])]);
-        try { return await this.client.login(token); }
-        catch (error) {
-            if (this.contentAccess && (error.code === 'DisallowedIntents' || error.message === 'Used disallowed intents')) return this.restart(false);
-            throw error;
-        }
+        return this.connection.connect(normalizeToken(token), config.privilegedIntents);
     }
     async restart(privileged) {
-        await this.client.destroy();
         const config = credentials(await this.store.read(), this.env);
-        this.contentAccess = privileged ?? config.privilegedIntents;
-        this.client.options.intents = new IntentsBitField([...basicIntents, ...(this.contentAccess ? [GatewayIntentBits.GuildMembers, GatewayIntentBits.MessageContent] : [])]);
-        return this.client.login(normalizeToken(config.token));
+        clearInterval(this.timer);
+        return this.connection.connect(normalizeToken(config.token), privileged ?? config.privilegedIntents);
     }
-    async destroy() { clearInterval(this.timer); await this.client.destroy(); }
-    guilds() { return [...this.client.guilds.cache.values()].map(guild => ({ id: guild.id, name: guild.name, memberCount: guild.memberCount, iconUrl: guild.iconURL({ size: 128 }) })); }
-    channels(id) { return [...(this.client.guilds.cache.get(id)?.channels.cache.values() || [])].filter(channel => channel.isTextBased() && !channel.isThread()).map(channel => ({ id: channel.id, name: channel.name, text: true })).sort((a, b) => a.name.localeCompare(b.name)); }
-    async getConfig(id) { const state = await this.store.read(); return state.guilds[id] || guildDefaults(id, this.client.guilds.cache.get(id)?.name); }
-    async onReady() {
-        this.client.user.setActivity(`version ${this.version}`);
+    async destroy() { clearInterval(this.timer); await this.connection.destroy(); }
+    guilds() { return [...(this.client?.guilds.cache.values() || [])].map(guild => ({ id: guild.id, name: guild.name, memberCount: guild.memberCount, iconUrl: guild.iconURL({ size: 128 }) })); }
+    channels(id) { return [...(this.client?.guilds.cache.get(id)?.channels.cache.values() || [])].filter(channel => channel.isTextBased() && !channel.isThread()).map(channel => ({ id: channel.id, name: channel.name, text: true })).sort((a, b) => a.name.localeCompare(b.name)); }
+    async getConfig(id) { const state = await this.store.read(); return state.guilds[id] || guildDefaults(id, this.client?.guilds.cache.get(id)?.name); }
+    async onReady(client = this.client) {
+        if (this.connection.closing || this.client !== client) return;
+        client.user.setActivity(`version ${this.version}`);
         await this.store.update(state => {
             for (const guild of this.guilds()) {
                 state.guilds[guild.id] ||= guildDefaults(guild.id, guild.name);
                 state.guilds[guild.id].guildName = guild.name;
             }
         });
-        await this.importLegacyCleaner();
+        if (this.connection.closing || this.client !== client) return;
+        await this.importLegacyCleaner(client);
+        if (this.connection.closing || this.client !== client) return;
         const definitions = commands.map(command => ({ ...command, dmPermission: false }));
-        await this.client.application.commands.set(definitions).catch(error => this.report('Global command registration', error));
-        for (const guild of this.client.guilds.cache.values()) await guild.commands.set(definitions).catch(error => this.report('Server command registration', error));
+        await client.application.commands.set(definitions).catch(error => this.report('Global command registration', error));
+        for (const guild of client.guilds.cache.values()) await guild.commands.set(definitions).catch(error => this.report('Server command registration', error));
+        if (this.connection.closing || this.client !== client) return;
         clearInterval(this.timer);
         this.timer = setInterval(() => { void this.maintenance().catch(error => this.report('Maintenance', error)); }, 60000);
         this.timer.unref();
         this.logger.log(`Dashboard bot ready. Registered ${commands.length} commands.`);
     }
-    async importLegacyCleaner() {
+    async importLegacyCleaner(client = this.client) {
         let legacy;
         try { legacy = JSON.parse(await readFile(path.join(this.store.directory, 'botConfig.json'), 'utf8')); }
         catch (error) { if (error.code === 'ENOENT') return; throw error; }
         await this.store.update(state => {
             if (state.importedCleaner) return;
-            for (const guild of this.client.guilds.cache.values()) {
+            for (const guild of client.guilds.cache.values()) {
                 const channelIds = (legacy.monitorChannels || []).filter(id => guild.channels.cache.has(id));
                 if (!channelIds.length && !guild.channels.cache.has(legacy.logChannelId)) continue;
                 state.guilds[guild.id].cleaner = { ...state.guilds[guild.id].cleaner, botList: legacy.botList || [], allowedRoles: legacy.allowedRoles || [], monitorChannels: channelIds, logChannelId: guild.channels.cache.has(legacy.logChannelId) ? legacy.logChannelId : '' };
@@ -141,7 +144,7 @@ export class BotController {
     async canManage(guildId, userId, oauthGuilds = [], write = false) {
         const config = credentials(await this.store.read(), this.env);
         if (userId === config.superAdminId) return true;
-        const guild = this.client.guilds.cache.get(guildId);
+        const guild = this.client?.guilds.cache.get(guildId);
         if (guild && this.isReady()) {
             try { return (await guild.members.fetch(userId)).permissions.has(manage); }
             catch { return false; }
@@ -213,7 +216,7 @@ export class BotController {
     }
     async moderate(guildId, action, targetId, reason, actorId, minutes = 10) {
         if (!['warn', 'timeout', 'untimeout', 'kick', 'ban', 'unban'].includes(action) || !snowflake(targetId) || !reason?.trim() || reason.length > 500) throw new Error('Choose an action, a valid user ID, and a reason of up to 500 characters.');
-        const guild = this.client.guilds.cache.get(guildId);
+        const guild = this.client?.guilds.cache.get(guildId);
         if (!guild || !this.isReady()) throw new Error('The bot must be online in this server.');
         if ([guild.ownerId, this.client.user.id, actorId].includes(targetId)) throw new Error('You cannot moderate yourself, the server owner, or this bot.');
         const member = await guild.members.fetch(targetId).catch(() => null);
@@ -240,7 +243,7 @@ export class BotController {
     }
     async purge(guildId, filters, actorId) {
         const count = Number(filters.count);
-        const guild = this.client.guilds.cache.get(guildId);
+        const guild = this.client?.guilds.cache.get(guildId);
         const channel = guild?.channels.cache.get(filters.channelId);
         if (!channel?.isTextBased() || !channel.messages || !Number.isInteger(count) || count < 1 || count > 1000) throw new Error('Choose a text channel and a count between 1 and 1,000.');
         const state = await this.store.read();
@@ -271,19 +274,55 @@ export class BotController {
     }
     async audit(guildId, category, eventType, title, details, extra = {}) {
         const config = await this.getConfig(guildId);
-        if (category !== 'moderation' && !businessActive(config)) return;
-        if (businessActive(config) && config.auditLogs.enabled) await this.store.update(state => {
-            state.audit.push({ guildId, category, eventType, title, details: String(details).slice(0, 8000), ...extra, createdAt: new Date().toISOString() });
+        const content = category === 'automod' && !config.auditLogs.includeMessageContent ? '(Message content omitted by server settings.)' : String(details);
+        const included = config.auditLogs.enabled && (category !== 'moderation' || config.auditLogs.moderationActions !== false) && (category !== 'automod' || config.auditLogs.autoModActions !== false);
+        if (businessActive(config) && included) await this.store.update(state => {
+            state.audit.push({ guildId, category, eventType, title, details: content.slice(0, 8000), ...extra, createdAt: new Date().toISOString() });
         });
-        const logs = config.auditLogs;
-        if (!logs.enabled) return;
-        const destination = category === 'moderation' ? logs.moderationChannelId || config.logChannelId : category === 'automod' ? logs.autoModChannelId || config.logChannelId : logs.sendServerEventsToDiscord ? logs.serverChannelId : null;
-        const channel = this.client.guilds.cache.get(guildId)?.channels.cache.get(destination);
-        if (!channel?.isTextBased()) return;
-        const now = Date.now(); const window = (this.logWindows.get(guildId) || []).filter(time => time > now - 60000);
-        if (window.length >= 10) return;
-        window.push(now); this.logWindows.set(guildId, window);
-        await channel.send({ embeds: [new EmbedBuilder().setColor(category === 'automod' ? 0xe6b450 : 0x43b581).setTitle(title.slice(0, 256)).setDescription(String(details || 'No details').slice(0, 4000)).setTimestamp()], allowedMentions: { parse: [] } }).catch(error => this.report('Log delivery', error));
+        return this.logDelivery.send(guildId, config, category, title, content);
+    }
+    async loggingDiagnostics(guildId, config) {
+        config ||= await this.getConfig(guildId);
+        const checks = await this.logDelivery.diagnostics(guildId, config);
+        const me = this.client?.guilds.cache.get(guildId)?.members?.me;
+        const moderation = checks.find(check => check.category === 'moderation');
+        if (moderation && me && businessActive(config) && !me.permissions?.has(PermissionsBitField.Flags.ViewAuditLog)) moderation.observationWarning = 'Discord-native bans, kicks and timeouts require View Audit Log on the bot role. Bot-issued actions can still be logged.';
+        const automod = checks.find(check => check.category === 'automod');
+        if (automod && me && !me.permissions?.has(PermissionsBitField.Flags.ManageGuild)) automod.observationWarning = 'Discord-native AutoMod events require Manage Server on the bot role. Bot-filter events can still be logged.';
+        return checks;
+    }
+    async testLog(guildId, category) {
+        return this.logDelivery.send(guildId, await this.getConfig(guildId), category, 'The Cleaner log test', 'Log delivery verified. This test was requested from the server dashboard.', true);
+    }
+    seenNativeEvent(key) {
+        const now = Date.now();
+        for (const [id, time] of this.nativeEvents) if (time < now - 60000) this.nativeEvents.delete(id);
+        if (this.nativeEvents.has(key)) return true;
+        if (this.nativeEvents.size >= 1000) this.nativeEvents.delete(this.nativeEvents.keys().next().value);
+        this.nativeEvents.set(key, now);
+        return false;
+    }
+    async nativeModeration(entry, guild) {
+        if (!guild || entry.executorId === this.client?.user?.id || !businessActive(await this.getConfig(guild.id))) return;
+        let action = new Map([[AuditLogEvent.MemberBanAdd, 'ban'], [AuditLogEvent.MemberBanRemove, 'unban'], [AuditLogEvent.MemberKick, 'kick']]).get(entry.action);
+        if (entry.action === AuditLogEvent.MemberUpdate) {
+            const timeout = entry.changes?.find(change => change.key === 'communication_disabled_until');
+            const mute = entry.changes?.find(change => change.key === 'mute');
+            if (timeout) action = timeout.new && Date.parse(timeout.new) > Date.now() ? 'timeout' : 'untimeout';
+            else if (mute) action = mute.new ? 'mute' : 'unmute';
+        }
+        if (!action || this.seenNativeEvent(`audit:${guild.id}:${entry.id}`)) return;
+        const target = entry.targetId || entry.target?.id;
+        if (!target) return;
+        await this.recordCase(guild.id, action, target, entry.target?.tag || entry.target?.username || target, entry.executorId || 'Discord', entry.reason || 'Action performed in Discord.');
+    }
+    async nativeAutoMod(execution) {
+        const guildId = execution.guild?.id;
+        if (!guildId || !businessActive(await this.getConfig(guildId))) return;
+        const content = execution.content || execution.matchedContent || '(Discord did not include message content.)';
+        const hash = createHash('sha256').update(`${execution.ruleId}:${execution.userId}:${execution.channelId}:${content}`).digest('hex');
+        if (this.seenNativeEvent(`automod:${guildId}:${execution.messageId || hash}`)) return;
+        await this.audit(guildId, 'automod', 'discord.automod', 'Discord AutoMod flagged a message', `Member: ${execution.userId}\nChannel: ${execution.channelId || 'unknown'}\n${content}`, { targetUserId: execution.userId, channelId: execution.channelId });
     }
     async serverEvent(guildId, toggle, title, content, channelId) {
         const config = await this.getConfig(guildId);
@@ -329,7 +368,7 @@ export class BotController {
         });
         if (levelUp !== null) {
             const config = await this.getConfig(guildId);
-            const destination = config.levelsChannelId ? this.client.guilds.cache.get(guildId)?.channels.cache.get(config.levelsChannelId) : source === 'message' ? channel : null;
+            const destination = config.levelsChannelId ? this.client?.guilds.cache.get(guildId)?.channels.cache.get(config.levelsChannelId) : source === 'message' ? channel : null;
             if (destination?.isTextBased()) await destination.send({ content: `${user.username} reached level ${levelUp}.`, allowedMentions: { parse: [] } }).catch(error => this.report('Level announcement', error));
         }
     }
@@ -366,7 +405,7 @@ export class BotController {
         } finally { this.maintenanceBusy = false; }
     }
     async cleanGuild(guildId, config) {
-        const guild = this.client.guilds.cache.get(guildId); if (!guild) return;
+        const guild = this.client?.guilds.cache.get(guildId); if (!guild) return;
         const removed = new Set(); let deleted = 0;
         for (const channelId of config.cleaner.monitorChannels) {
             const channel = guild.channels.cache.get(channelId); if (!channel?.messages) continue;

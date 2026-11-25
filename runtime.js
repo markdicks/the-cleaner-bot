@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { connectionAction } from './app/connection.js';
 
 export function normalizeToken(value) {
     let token = typeof value === 'string' ? value.trim() : '';
@@ -18,17 +19,21 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
     let discordStatus = 'starting';
     let errorCode = null;
     const startedAt = Date.now();
-    const getStatus = () => ({
+    const getStatus = () => {
+        const managed = client.getConnectionStatus?.();
+        const discord = managed && managed.status !== 'idle' ? managed : {
+            connected: client.isReady(),
+            status: client.isReady() ? 'connected' : discordStatus,
+            errorCode: client.isReady() ? null : errorCode,
+            action: client.isReady() ? null : connectionAction(errorCode)
+        };
+        return ({
         service: 'the-cleaner-bot',
         version,
         uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
         ...(getStorageStatus ? { storage: getStorageStatus() } : {}),
-        discord: {
-            connected: client.isReady(),
-            status: client.isReady() ? 'connected' : discordStatus,
-            errorCode: client.isReady() ? null : errorCode
-        }
-    });
+        discord
+    }); };
 
     const handler = createHandler?.(getStatus);
     const server = createServer((request, response) => {
@@ -79,11 +84,12 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
     });
     logger.log(`HTTP service listening on port ${server.address().port}.`);
 
-    const normalizedToken = normalizeToken(typeof token === 'function' ? await Promise.resolve().then(token).catch(() => '') : token);
+    let tokenLookupFailed = false;
+    const normalizedToken = normalizeToken(typeof token === 'function' ? await Promise.resolve().then(token).catch(() => { tokenLookupFailed = true; return ''; }) : token);
     if (!normalizedToken) {
         discordStatus = 'configuration_required';
-        errorCode = 'token_missing';
-        logger.error('DISCORD_TOKEN is missing. Set it in the hosting environment and restart. The HTTP service will stay available.');
+        errorCode = tokenLookupFailed ? 'storage_unavailable' : 'token_missing';
+        logger.error(tokenLookupFailed ? 'Could not load bot settings. Check database configuration; HTTP remains available.' : 'DISCORD_TOKEN is missing. Set it in the hosting environment and restart. The HTTP service will stay available.');
     } else {
         void Promise.resolve().then(() => client.login(normalizedToken)).then(() => {
             discordStatus = 'connecting';
@@ -91,7 +97,7 @@ export async function startRuntime({ client, token, port = process.env.PORT || 3
             errorCode = error.code === 'TokenInvalid' ? 'token_invalid' : 'connection_failed';
             discordStatus = 'offline';
             logger.error(`Discord login failed (${errorCode}). Check DISCORD_TOKEN and restart. The HTTP service will stay available.`);
-            await client.destroy();
+            if (!client.getConnectionStatus) await client.destroy();
         }).catch(() => logger.error('Discord client cleanup failed.'));
     }
 

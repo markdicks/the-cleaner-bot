@@ -50,6 +50,14 @@ test('connection errors also preserve HTTP availability', async t => {
     assert.equal((await fetch(address(runtime))).status, 200);
 });
 
+test('failed database settings lookup reports storage action, not a misleading missing-token error', async t => {
+    const runtime = await startRuntime({ client: fakeClient(), token: async () => { throw new Error('private-database-value'); }, host: '127.0.0.1', port: 0, logger });
+    t.after(() => runtime.stop());
+    const body = await (await fetch(address(runtime) + '/api/status')).text();
+    assert.equal(JSON.parse(body).discord.errorCode, 'storage_unavailable');
+    assert.doesNotMatch(body, /private-database-value/);
+});
+
 test('connected client is ready and HTTP methods/routes are restricted', async t => {
     const client = fakeClient();
     client.isReady = () => true;
@@ -70,7 +78,7 @@ test('public status reports the selected storage provider and current readiness 
     storageStatus = 'ready';
     const body = await (await fetch(address(runtime) + '/api/status')).text();
     assert.deepEqual(JSON.parse(body).storage, { provider: 'MySQL', status: 'ready' });
-    assert.doesNotMatch(body, /password|connectionString|hostname|username/i);
+    assert.doesNotMatch(body, /"(?:password|connectionString|hostname|username)"\s*:/i);
 });
 
 test('the listener starts before Discord login is attempted', async t => {

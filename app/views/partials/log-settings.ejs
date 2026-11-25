@@ -1,0 +1,21 @@
+<section class="section">
+    <div class="section-heading"><h2>Audit logging</h2><% if (business) { %><a class="button secondary" href="/Dashboard/AuditLogs/<%= guild.guildId %>"><i data-lucide="search"></i>Browse history</a><% } %></div>
+    <% if (!business) { %>
+    <div class="empty compact"><i data-lucide="lock-keyhole"></i><h3>Business plan required</h3><p>Current plan: <%= guild.premiumTier %></p></div>
+    <% } else { %>
+    <form method="post">
+        <input type="hidden" name="csrf" value="<%= csrf %>"><input type="hidden" name="section" value="logs">
+        <div class="field-grid">
+        <% for (const [key, label] of [['moderationChannelId','Bans, mutes, warnings & timeouts'],['autoModChannelId','Flagged words & links'],['serverChannelId','Server events']]) { %>
+            <label class="field"><span><%= label %></span><select name="<%= key %>"><option value="">None</option><% channels.forEach(channel => { %><option value="<%= channel.id %>" <%= guild.auditLogs[key] === channel.id ? 'selected' : '' %>>#<%= channel.name %></option><% }); %></select></label>
+        <% } %>
+        </div>
+        <div class="toggle-grid">
+        <% for (const [key, label] of [['enabled','Audit logging'],['moderationActions','Moderation actions'],['autoModActions','AutoMod actions'],['includeMessageContent','Include flagged message content'],['sendServerEventsToDiscord','Send server events to Discord'],['messageEdits','Message edits'],['messageDeletes','Message deletions'],['memberChanges','Member changes'],['voiceChanges','Voice changes'],['serverChanges','Server name changes']]) { %>
+            <label class="toggle-row"><span><%= label %></span><input class="switch" type="checkbox" name="<%= key %>" <%= guild.auditLogs[key] === true || (['moderationActions','autoModActions'].includes(key) && guild.auditLogs[key] === undefined) ? 'checked' : '' %>></label>
+        <% } %>
+        </div>
+        <div class="form-actions"><button class="button primary"><i data-lucide="save"></i>Save audit settings</button></div>
+    </form>
+    <% } %>
+</section>

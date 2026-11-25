@@ -33,6 +33,8 @@ async function fixture(t, env = {}, fetcher) {
         canManage: async (id, user) => user === SUPERADMIN_ID || (user === userId && id === guildId),
         consumeSetup: token => { const match = token === setup; setup = null; return match ? SUPERADMIN_ID : null; },
         moderate: async (...args) => { calls.push(args); }, purge: async (...args) => { calls.push(args); return 7; },
+        loggingDiagnostics: async () => [{ category: 'moderation', label: 'Moderation actions', ok: true, status: 'ready', message: 'Ready to send.', canTest: true }],
+        testLog: async (...args) => { calls.push(['testLog', ...args]); return { ok: true, message: 'Test log delivered.' }; },
         restart: async () => { calls.push('restart'); }, destroy: async () => {}, login: async () => {} };
     const runtime = await startRuntime({ client: bot, token: '', port: 0, host: '127.0.0.1', version: '2.1.0', logger: quiet,
         createHandler: getStatus => createDashboard({ store, bot, version: '2.1.0', env, getStatus, fetcher, logger: quiet }) });
@@ -148,6 +150,41 @@ test('moderation form invokes the bot only after confirmation and permission che
     assert.equal(calls.length, 0);
     assert.equal((await request(`/Dashboard/Guild/${guildId}/action`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ ...body, confirm: 'on' }) })).status, 302);
     assert.deepEqual(calls[0], [guildId, 'timeout', userId, 'Spam', SUPERADMIN_ID, 10]);
+});
+
+test('changing privileged intents reconnects automatically, without the optional restart checkbox', async t => {
+    const { request, session, calls, store } = await fixture(t);
+    const owner = session();
+    const result = await request('/SuperAdmin', { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, clientId: '123456789012345678', privilegedIntents: 'on' }) });
+    assert.equal(result.status, 302); assert.match(result.headers.get('location'), /Reconnecting/);
+    assert.equal((await store.read()).settings.privilegedIntents, true);
+    assert.deepEqual(calls, ['restart']);
+});
+
+test('reconnect endpoint requires both owner access and CSRF', async t => {
+    const { request, session, calls } = await fixture(t);
+    const owner = session(); const member = session(userId);
+    assert.equal((await request('/SuperAdmin/reconnect', { method: 'POST', headers: { cookie: member.cookie }, body: new URLSearchParams({ csrf: member.csrf }) })).status, 403);
+    assert.equal((await request('/SuperAdmin/reconnect', { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: 'wrong' }) })).status, 403);
+    assert.equal(calls.length, 0);
+    assert.equal((await request('/SuperAdmin/reconnect', { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf }) })).status, 302);
+    assert.deepEqual(calls, ['restart']);
+});
+
+test('log diagnostics are read-only and log tests require server access, CSRF, valid category and plan', async t => {
+    const { request, session, calls } = await fixture(t);
+    const member = session(userId);
+    const checks = await request(`/Dashboard/Guild/${guildId}/diagnostics`, { headers: { cookie: member.cookie } });
+    assert.equal(checks.status, 200); assert.equal((await checks.json()).logs[0].status, 'ready');
+    assert.equal(calls.length, 0);
+    const options = body => ({ method: 'POST', headers: { cookie: member.cookie }, body: new URLSearchParams(body) });
+    assert.equal((await request(`/Dashboard/Guild/${otherGuild}/test-log`, options({ csrf: member.csrf, category: 'moderation' }))).status, 403);
+    assert.equal((await request(`/Dashboard/Guild/${guildId}/test-log`, options({ csrf: 'wrong', category: 'moderation' }))).status, 403);
+    assert.equal((await request(`/Dashboard/Guild/${guildId}/test-log`, options({ csrf: member.csrf, category: 'invalid' }))).status, 400);
+    assert.equal((await request(`/Dashboard/Guild/${guildId}/test-log`, options({ csrf: member.csrf, category: 'automod' }))).status, 403);
+    assert.equal(calls.length, 0);
+    assert.equal((await request(`/Dashboard/Guild/${guildId}/test-log`, options({ csrf: member.csrf, category: 'moderation' }))).status, 302);
+    assert.deepEqual(calls[0], ['testLog', guildId, 'moderation']);
 });
 
 test('Business log history escapes hostile content and exports formula-safe CSV', async t => {

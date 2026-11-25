@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { AuditLogEvent } from 'discord.js';
 import { BotController, voiceEligibleMembers } from '../app/bot.js';
 import { guildDefaults, SUPERADMIN_ID } from '../app/settings.js';
 import { initialState } from '../app/store.js';
@@ -49,8 +50,9 @@ test('server audit delivery is opt-in and capped at ten messages per minute', as
     const store = memoryStore(); const bot = new BotController({ store, env: {}, version: '2.1.0', logger: quiet });
     t.after(() => bot.destroy());
     let sends = 0;
-    const channel = { isTextBased: () => true, send: async () => { sends++; } };
-    bot.client.guilds.cache.set(guildId, { channels: { cache: new Map([['channel', channel]]) } });
+    bot.isReady = () => true;
+    const channel = { id: 'channel', guildId, name: 'logs', isTextBased: () => true, permissionsFor: () => ({ has: () => true }), send: async () => { sends++; } };
+    bot.client.guilds.cache.set(guildId, { members: { me: {} }, channels: { cache: new Map([['channel', channel]]) } });
     await store.update(state => { const config = state.guilds[guildId]; config.premiumTier = 'Business'; config.auditLogs.serverChannelId = 'channel'; config.auditLogs.serverChanges = true; });
     await bot.serverEvent(guildId, 'serverChanges', 'Server renamed', 'name');
     assert.equal(sends, 0);
@@ -65,4 +67,31 @@ test('XP cooldown prevents message spam from awarding repeated XP', async t => {
     const user = { id: userId, username: 'member', tag: 'member' };
     await bot.awardXp(guildId, user, 15, 'message'); await bot.awardXp(guildId, user, 15, 'message');
     assert.equal((await store.read()).levels[`${guildId}:${userId}`].xp, 15);
+});
+
+test('native Discord moderation is recorded once and bot-issued audit events are not duplicated', async t => {
+    const store = memoryStore(); const bot = new BotController({ store, env: {}, version: '2.1.2', logger: quiet });
+    t.after(() => bot.destroy());
+    bot.client.user = { id: '123456789012345678' };
+    await store.update(state => { state.guilds[guildId].premiumTier = 'Business'; });
+    const entry = { id: 'audit-1', action: AuditLogEvent.MemberBanAdd, executorId: SUPERADMIN_ID, targetId: userId, target: { tag: 'member' }, reason: 'Native ban' };
+    await bot.nativeModeration(entry, { id: guildId });
+    await bot.nativeModeration(entry, { id: guildId });
+    await bot.nativeModeration({ ...entry, id: 'audit-2', executorId: bot.client.user.id }, { id: guildId });
+    const state = await store.read();
+    assert.equal(state.cases.length, 1); assert.equal(state.cases[0].action, 'ban');
+    assert.equal(state.audit.length, 1);
+});
+
+test('Discord AutoMod logs retain flagged text, respect content privacy, and deduplicate rule actions', async t => {
+    const store = memoryStore(); const bot = new BotController({ store, env: {}, version: '2.1.2', logger: quiet });
+    t.after(() => bot.destroy());
+    await store.update(state => { state.guilds[guildId].premiumTier = 'Business'; });
+    const event = { guild: { id: guildId }, userId, ruleId: 'rule', channelId: 'channel', content: 'Flagged https://example.com/full-link' };
+    await bot.nativeAutoMod(event); await bot.nativeAutoMod(event);
+    assert.equal((await store.read()).audit.length, 1);
+    assert.match((await store.read()).audit[0].details, /https:\/\/example.com\/full-link/);
+    await store.update(state => { state.guilds[guildId].auditLogs.includeMessageContent = false; });
+    await bot.nativeAutoMod({ ...event, content: 'private second message' });
+    assert.doesNotMatch(JSON.stringify((await store.read()).audit), /private second message/);
 });
