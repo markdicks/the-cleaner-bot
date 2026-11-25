@@ -2,7 +2,7 @@ import { ChannelType, PermissionsBitField } from 'discord.js';
 
 const fields = [
     ['name', 'Name'], ['type', 'Channel type'], ['topic', 'Topic'], ['parentId', 'Category'],
-    ['rawPosition', 'Position'], ['nsfw', 'Age-restricted'], ['rateLimitPerUser', 'Slowmode (seconds)'],
+    ['nsfw', 'Age-restricted'], ['rateLimitPerUser', 'Slowmode (seconds)'],
     ['bitrate', 'Voice bitrate'], ['userLimit', 'Voice member limit'], ['rtcRegion', 'Voice region'],
     ['defaultAutoArchiveDuration', 'Default thread archive (minutes)'],
     ['defaultThreadRateLimitPerUser', 'Default thread slowmode (seconds)']
@@ -42,10 +42,15 @@ export function channelChanges(before, after) {
         for (const id of ids) {
             const old = oldPermissions.get(id); const current = newPermissions.get(id);
             if (old?.allow === current?.allow && old?.deny === current?.deny && old?.type === current?.type) continue;
-            const subject = `${(current || old).type === 1 ? 'Member' : 'Role'} ${id}`;
+            const subject = (current || old).type === 1 ? `Member <@${id}>` : `Role <@&${id}>`;
             if (!current) changes.push(`Permissions removed for ${subject}: allow ${permissions(old.allow)}; deny ${permissions(old.deny)}`);
             else if (!old) changes.push(`Permissions added for ${subject}: allow ${permissions(current.allow)}; deny ${permissions(current.deny)}`);
-            else changes.push(`Permissions changed for ${subject}: allow ${permissions(old.allow)} -> ${permissions(current.allow)}; deny ${permissions(old.deny)} -> ${permissions(current.deny)}`);
+            else {
+                const names = [...new Set([old.allow, old.deny, current.allow, current.deny].flatMap(bits => new PermissionsBitField(BigInt(bits)).toArray()))];
+                const state = (entry, name) => new PermissionsBitField(BigInt(entry.allow)).has(name, false) ? 'Allow' : new PermissionsBitField(BigInt(entry.deny)).has(name, false) ? 'Deny' : 'Inherit';
+                const differences = names.filter(name => state(old, name) !== state(current, name)).map(name => `${name}: ${state(old, name)} -> ${state(current, name)}`);
+                changes.push(`Permissions changed for ${subject}:\n${differences.join('\n') || 'Overwrite target type changed'}`);
+            }
         }
     }
     return changes;
@@ -56,7 +61,7 @@ export function channelAuditEvent(before, after, kind) {
     const guildId = channel?.guildId || channel?.guild?.id;
     if (!guildId || !channel.id || channel.isThread?.()) return null;
     if (before && after && (before.id !== after.id || (before.guildId || before.guild?.id) !== guildId)) return null;
-    const heading = `Channel: #${channel.name || channel.id} (${channel.id})`;
+    const heading = `Channel: <#${channel.id}> (#${channel.name || channel.id})`;
     if (kind === 'updated') {
         if (!before || !after) return null;
         const changes = channelChanges(before, after);

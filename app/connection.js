@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, Partials } from 'discord.js';
 
 const basicIntents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildModeration, GatewayIntentBits.AutoModerationExecution];
 const portal = 'https://discord.com/developers/applications';
@@ -36,7 +36,7 @@ export class GatewayConnection {
         this.client = this.newClient(false);
     }
     newClient(privileged) {
-        const client = this.createClient({ intents: [...basicIntents, ...(privileged ? [GatewayIntentBits.GuildMembers, GatewayIntentBits.MessageContent] : [])] });
+        const client = this.createClient({ intents: [...basicIntents, ...(privileged ? [GatewayIntentBits.GuildMembers, GatewayIntentBits.MessageContent] : [])], partials: [Partials.Message] });
         const current = () => this.client === client && this.activeClient === client && !this.closing;
         client.on('clientReady', () => {
             if (!current()) return;

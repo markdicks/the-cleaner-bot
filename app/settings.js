@@ -17,7 +17,7 @@ export function guildDefaults(id, name = id) {
         ignoredModerationChannelIds: [], blockedWords: [],
         auditLogs: { enabled: true, moderationActions: true, autoModActions: true, moderationChannelId: '1574428730997084240', autoModChannelId: '1574423826417193091',
             serverChannelId: '', sendServerEventsToDiscord: false, messageEdits: false, messageDeletes: false,
-            memberChanges: false, voiceChanges: false, serverChanges: false, channelChanges: false, includeMessageContent: true },
+            memberChanges: false, voiceChanges: false, serverChanges: false, channelChanges: false, roleChanges: false, includeMessageContent: true },
         cleaner: { botList: [], allowedRoles: [], monitorChannels: [], logChannelId: '', intervalMinutes: 60 },
         updatedAt: new Date().toISOString()
     };
@@ -52,7 +52,7 @@ export function validateGuildSettings(body, current, channels) {
     } else if (body.section === 'logs') {
         if (!businessActive(current)) throw new Error('Business or Enterprise is required for audit log settings.');
         for (const key of ['moderationChannelId', 'autoModChannelId', 'serverChannelId']) next.auditLogs[key] = checkChannel(body[key]);
-        for (const key of ['enabled', 'moderationActions', 'autoModActions', 'sendServerEventsToDiscord', 'messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'channelChanges', 'includeMessageContent']) next.auditLogs[key] = body[key] === 'on';
+        for (const key of ['enabled', 'moderationActions', 'autoModActions', 'sendServerEventsToDiscord', 'messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'channelChanges', 'roleChanges', 'includeMessageContent']) next.auditLogs[key] = body[key] === 'on';
     } else if (body.section === 'cleaner') {
         const interval = Number(body.intervalMinutes);
         if (!Number.isInteger(interval) || interval < 1 || interval > 120960) throw new Error('Cleaning interval must be between 1 and 120,960 minutes.');

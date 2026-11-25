@@ -25,6 +25,10 @@ await store.update(state => {
     state.guilds[guildId].blockedWords = ['example phrase'];
     state.cases = [{ id: 1, guildId, action: 'warn', targetUserTag: 'Example member', reason: 'Message spam', createdAt: new Date().toISOString() }];
     state.nextCaseId = 2;
+    state.audit = [{ guildId, category: 'server', title: 'Message Edited', details: 'Example edit before and after', createdAt: new Date().toISOString(),
+        presentation: { description: 'From: Example member | In: general-chat', footer: 'Author: 680840717731364927 | Message ID: 1574423826417193092',
+            fields: [{ name: 'Before', value: 'The original message before it was edited.' }, { name: 'After', value: 'The updated message with a long link: https://example.com/' + 'long-path-segment/'.repeat(18) }],
+            jumpUrl: `https://discord.com/channels/${guildId}/1574423826417193091/1574423826417193092` } }];
 });
 const bot = new BotController({ store, env: {}, version });
 let connected = false;

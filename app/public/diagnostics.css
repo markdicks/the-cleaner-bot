@@ -19,6 +19,9 @@
 .log-check-footer .muted { font-size: 12px; }
 .log-check-footer form { flex: none; }
 .button:disabled { cursor: not-allowed; }
+.audit-entry { min-width: 0; overflow-wrap: anywhere; }
+.audit-entry h4 { margin: 16px 0 6px; font-size: 14px; }
+.audit-entry small.message-content { display: block; margin-top: 14px; }
 @media (max-width: 600px) {
     .connection-panel .button-row { align-items: stretch; }
     .connection-panel .button-row > a, .connection-panel .button-row > form { width: 100%; }

@@ -133,10 +133,11 @@ test('Channel changes is visible and saved on the audit settings page, including
     await store.update(state => { const config = state.guilds[guildId]; config.premiumTier = 'Business'; delete config.auditLogs.channelChanges; config.auditLogs.serverChanges = true; });
     const legacyPage = await (await request(`/Dashboard/Guild/${guildId}?tab=logs`, { headers: { cookie: owner.cookie } })).text();
     assert.match(legacyPage, /name="channelChanges"\s+checked/);
-    const saved = await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, section: 'logs', enabled: 'on', moderationActions: 'on', autoModActions: 'on', sendServerEventsToDiscord: 'on', serverChannelId: channelId, channelChanges: 'on' }) });
+    assert.match(legacyPage, /name="roleChanges"/);
+    const saved = await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, section: 'logs', enabled: 'on', moderationActions: 'on', autoModActions: 'on', sendServerEventsToDiscord: 'on', serverChannelId: channelId, channelChanges: 'on', roleChanges: 'on' }) });
     assert.equal(saved.status, 302); assert.match(saved.headers.get('location'), /Settings%20saved/);
     const config = (await store.read()).guilds[guildId];
-    assert.equal(config.auditLogs.channelChanges, true); assert.equal(config.auditLogs.serverChanges, false);
+    assert.equal(config.auditLogs.channelChanges, true); assert.equal(config.auditLogs.serverChanges, false); assert.equal(config.auditLogs.roleChanges, true);
 });
 
 test('uppercase legacy credentials remain environment-managed on the owner settings page', async t => {
@@ -207,6 +208,21 @@ test('Business log history escapes hostile content and exports formula-safe CSV'
     assert.match(page, /&lt;script&gt;/); assert.doesNotMatch(page, /<script>alert/);
     const csv = await (await request(`/Dashboard/AuditLogs/${guildId}?format=csv`, { headers: { cookie: owner.cookie } })).text();
     assert.match(csv, /"'=SUM/);
+});
+
+test('structured audit history escapes before/after and only renders Discord context links', async t => {
+    const { request, session, store } = await fixture(t); const owner = session();
+    await store.update(state => {
+        state.guilds[guildId].premiumTier = 'Business';
+        state.audit.push({ guildId, category: 'server', title: 'Message Edited', details: 'Before and after text', createdAt: new Date().toISOString(),
+            presentation: { description: 'From member', fields: [{ name: 'Before', value: '<script>hostile()</script>' }, { name: 'After', value: 'Updated text' }], footer: 'Message ID: 123', jumpUrl: `https://discord.com/channels/${guildId}/${channelId}` } });
+        state.audit.push({ guildId, category: 'server', title: 'Old entry', details: 'Legacy text', createdAt: new Date().toISOString(), presentation: { jumpUrl: 'javascript:hostile()' } });
+    });
+    const page = await (await request(`/Dashboard/AuditLogs/${guildId}`, { headers: { cookie: owner.cookie } })).text();
+    assert.match(page, /<h4>Before<\/h4>/); assert.match(page, /<h4>After<\/h4>/);
+    assert.match(page, /&lt;script&gt;hostile/); assert.match(page, /Updated text/); assert.match(page, /Legacy text/);
+    assert.match(page, new RegExp(`https://discord.com/channels/${guildId}/${channelId}`));
+    assert.doesNotMatch(page, /javascript:hostile|<script>hostile/);
 });
 
 test('OAuth state must match, callback uses the public HTTPS origin, session never contains access token', async t => {

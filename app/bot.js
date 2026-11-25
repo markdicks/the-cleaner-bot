@@ -8,6 +8,7 @@ import { normalizeToken } from '../runtime.js';
 import { GatewayConnection } from './connection.js';
 import { LogDelivery } from './logging.js';
 import { channelAuditEvent } from './channel-audit.js';
+import { claimEvent, digest, messagePresentation, messageSnapshot, messageText, roleAuditEvent } from './audit-events.js';
 
 const manage = PermissionsBitField.Flags.ManageGuild;
 const option = (name, description, type, required = false) => ({ name, description, type, required });
@@ -53,6 +54,7 @@ export class BotController {
         this.origin = env.PUBLIC_URL || ''; this.maintenanceBusy = false;
         this.nativeEvents = new Map();
         this.channelEventWindows = new Map();
+        this.eventTails = new Map(); this.boundClients = new WeakSet();
         this.connection = new GatewayConnection({ createClient, readyTimeoutMs, logger, bindClient: client => this.bindClient(client) });
         this.logDelivery = new LogDelivery({ getClient: () => this.client, isReady: () => this.isReady(), logger });
     }
@@ -60,6 +62,8 @@ export class BotController {
     get contentAccess() { return this.connection.getStatus().privilegedActive; }
     getConnectionStatus() { return this.connection.getStatus(); }
     bindClient(client) {
+        if (this.boundClients.has(client)) return;
+        this.boundClients.add(client);
         const on = (event, handler) => client.on(event, (...args) => {
             if (this.client !== client || this.connection.activeClient !== client || this.connection.closing) return;
             void Promise.resolve().then(() => { if (this.client === client && this.connection.activeClient === client && !this.connection.closing) return handler(...args); }).catch(error => this.report(event, error));
@@ -67,20 +71,24 @@ export class BotController {
         on('clientReady', () => this.onReady(client));
         on('interactionCreate', interaction => this.onInteraction(interaction));
         on('messageCreate', message => this.onMessage(message));
-        on('messageUpdate', (before, after) => { if (before.content !== after.content && after.guild && !after.author?.bot) return this.onMessage(after, true); });
-        on('messageDelete', message => { if (message.guild && !message.author?.bot) return this.serverEvent(message.guild.id, 'messageDeletes', 'Message deleted', message.content || '(not cached)', message.channelId); });
+        on('messageUpdate', (before, after) => this.messageUpdated(before, after));
+        on('messageDelete', message => this.messageDeleted(message));
+        on('messageDeleteBulk', (messages, channel) => this.messagesBulkDeleted(messages, channel));
         on('guildMemberAdd', member => this.memberChange(member, true));
         on('guildMemberRemove', member => this.memberChange(member, false));
-        on('guildUpdate', (before, after) => { if (before.name !== after.name) return this.serverEvent(after.id, 'serverChanges', 'Server renamed', `${before.name} -> ${after.name}`); });
+        on('guildUpdate', (before, after) => { if (before.name !== after.name) return this.streamEvent({ guildId: after.id, entityId: after.id, title: 'Server renamed', eventType: 'guild.renamed', details: `${before.name} -> ${after.name}` }, 'serverChanges'); });
         on('channelCreate', channel => this.channelEvent(null, channel, 'created'));
         on('channelUpdate', (before, after) => this.channelEvent(before, after, 'updated'));
         on('channelDelete', channel => this.channelEvent(channel, null, 'deleted'));
+        on('roleCreate', role => this.roleEvent(null, role, 'created'));
+        on('roleUpdate', (before, after) => this.roleEvent(before, after, 'updated'));
+        on('roleDelete', role => this.roleEvent(role, null, 'deleted'));
         on('guildAuditLogEntryCreate', (entry, guild) => this.nativeModeration(entry, guild));
         on('autoModerationActionExecution', execution => this.nativeAutoMod(execution));
         on('voiceStateUpdate', (before, after) => {
             if (before.channelId !== after.channelId || after.deaf) this.voiceSince.delete(`${after.guild.id}:${after.id}`);
             for (const channel of [before.channel, after.channel]) if (channel && !voiceEligibleMembers(channel).length) for (const member of channel.members.values()) this.voiceSince.delete(`${after.guild.id}:${member.id}`);
-            if (before.channelId !== after.channelId) void this.serverEvent(after.guild.id, 'voiceChanges', 'Voice channel changed', `<@${after.id}>: ${before.channel?.name || 'disconnected'} -> ${after.channel?.name || 'disconnected'}`).catch(error => this.report('Voice log', error));
+            if (before.channelId !== after.channelId) return this.voiceEvent(before, after);
         });
         on('error', error => this.report('Discord', error));
     }
@@ -157,6 +165,11 @@ export class BotController {
         return !write && oauthGuilds.includes(guildId);
     }
     async onInteraction(interaction) {
+        if (interaction.isButton() && interaction.customId.startsWith('audit:user:')) {
+            const [, , guildId, userId] = interaction.customId.split(':');
+            if (interaction.guildId !== guildId || interaction.message?.author?.id !== this.client?.user?.id || !snowflake(userId)) return interaction.reply({ content: 'This log button is not valid for this server.', flags: 64 });
+            return interaction.reply({ content: `User ID: ${userId}`, flags: 64, allowedMentions: { parse: [] } });
+        }
         if (interaction.isButton() && interaction.customId.startsWith('notice:dismiss:')) {
             if (interaction.customId !== `notice:dismiss:${interaction.user.id}`) return interaction.reply({ content: 'This notice is private.', flags: 64 });
             await interaction.update({ content: 'Notice dismissed.', embeds: [], components: [] });
@@ -269,22 +282,36 @@ export class BotController {
             if (batch.size < 100) break;
         }
         let deleted = 0;
+        await this.suppressDeletions(guildId, matches);
         for (let index = 0; index < matches.length; index += 100) deleted += (await channel.bulkDelete(matches.slice(index, index + 100), true)).size;
-        await this.recordCase(guildId, 'purge', '', channel.name, actorId, `Deleted ${deleted} of ${count} inspected messages in #${channel.name}.`);
+        const filtersText = [filters.userId && `User: <@${filters.userId}>`, filters.roleId && `Role: <@&${filters.roleId}>`, filters.bots && 'Bots only', filters.contains && `Containing: ${filters.contains}`].filter(Boolean).join('\n') || 'All matching messages';
+        await this.recordCase(guildId, 'purge', '', channel.name, actorId, `Deleted ${deleted} of ${inspected} inspected messages in #${channel.name}.\n${filtersText}`, {
+            presentation: { userId: actorId, description: `<@${actorId}> used purge in <#${channel.id}>.`,
+                fields: [{ name: 'Bulk Delete', value: `${deleted} messages deleted; ${inspected} inspected (${count} requested).` }, { name: 'Filters', value: filtersText }], footer: `Channel ID: ${channel.id}` }
+        });
         return deleted;
     }
-    async recordCase(guildId, action, targetUserId, targetUserTag, moderatorUserId, reason) {
-        await this.store.update(state => { state.cases.push({ id: state.nextCaseId++, guildId, action, targetUserId, targetUserTag, moderatorUserId, reason, createdAt: new Date().toISOString() }); });
-        await this.audit(guildId, 'moderation', action, `${action}: ${targetUserTag}`, reason, { targetUserId, moderatorUserId });
+    async recordCase(guildId, action, targetUserId, targetUserTag, moderatorUserId, reason, extra = {}) {
+        return this.audit(guildId, 'moderation', action, `${action}: ${targetUserTag}`, reason, { targetUserId, moderatorUserId,
+            presentation: { userId: targetUserId, description: `${targetUserId ? `Member: <@${targetUserId}>\n` : ''}Moderator: ${snowflake(moderatorUserId) ? `<@${moderatorUserId}>` : moderatorUserId}`,
+                fields: [{ name: 'Reason', value: reason }], footer: `User ID: ${targetUserId || 'not applicable'}` },
+            ...extra, caseRecord: { guildId, action, targetUserId, targetUserTag, moderatorUserId, reason } });
     }
     async audit(guildId, category, eventType, title, details, extra = {}) {
         const config = await this.getConfig(guildId);
         const content = category === 'automod' && !config.auditLogs.includeMessageContent ? '(Message content omitted by server settings.)' : String(details);
         const included = config.auditLogs.enabled && (category !== 'moderation' || config.auditLogs.moderationActions !== false) && (category !== 'automod' || config.auditLogs.autoModActions !== false);
-        if (businessActive(config) && included) await this.store.update(state => {
-            state.audit.push({ guildId, category, eventType, title, details: content.slice(0, 8000), ...extra, createdAt: new Date().toISOString() });
+        const { claim, caseRecord, ...metadata } = extra;
+        if (category === 'automod' && !config.auditLogs.includeMessageContent) delete metadata.presentation;
+        const accepted = await this.store.update(state => {
+            if (!claimEvent(state, claim)) return false;
+            const createdAt = new Date().toISOString();
+            if (caseRecord) state.cases.push({ id: state.nextCaseId++, ...caseRecord, createdAt });
+            if (businessActive(config) && included) state.audit.push({ guildId, category, eventType, title, details: content.slice(0, 16000), ...metadata, createdAt });
+            return true;
         });
-        return this.logDelivery.send(guildId, config, category, title, content);
+        if (!accepted) return { ok: true, code: 'duplicate_suppressed' };
+        return this.logDelivery.send(guildId, config, category, title, content, false, metadata.presentation);
     }
     async loggingDiagnostics(guildId, config) {
         config ||= await this.getConfig(guildId);
@@ -319,7 +346,7 @@ export class BotController {
         if (!action || this.seenNativeEvent(`audit:${guild.id}:${entry.id}`)) return;
         const target = entry.targetId || entry.target?.id;
         if (!target) return;
-        await this.recordCase(guild.id, action, target, entry.target?.tag || entry.target?.username || target, entry.executorId || 'Discord', entry.reason || 'Action performed in Discord.');
+        await this.recordCase(guild.id, action, target, entry.target?.tag || entry.target?.username || target, entry.executorId || 'Discord', entry.reason || 'Action performed in Discord.', { claim: { key: `audit:${guild.id}:${entry.id}`, signature: entry.id } });
     }
     async nativeAutoMod(execution) {
         const guildId = execution.guild?.id;
@@ -327,32 +354,105 @@ export class BotController {
         const content = execution.content || execution.matchedContent || '(Discord did not include message content.)';
         const hash = createHash('sha256').update(`${execution.ruleId}:${execution.userId}:${execution.channelId}:${content}`).digest('hex');
         if (this.seenNativeEvent(`automod:${guildId}:${execution.messageId || hash}`)) return;
-        await this.audit(guildId, 'automod', 'discord.automod', 'Discord AutoMod flagged a message', `Member: ${execution.userId}\nChannel: ${execution.channelId || 'unknown'}\n${content}`, { targetUserId: execution.userId, channelId: execution.channelId });
+        await this.audit(guildId, 'automod', 'discord.automod', 'Discord AutoMod flagged a message', `Member: ${execution.userId}\nChannel: ${execution.channelId || 'unknown'}\n${content}`, { targetUserId: execution.userId, channelId: execution.channelId,
+            claim: { key: `automod:${guildId}:${execution.messageId || hash}`, signature: 'flagged', ttl: execution.messageId ? 86400000 : 60000 },
+            presentation: { userId: execution.userId, description: `Member: <@${execution.userId}>\nChannel: ${execution.channelId ? `<#${execution.channelId}>` : 'unknown'}`, fields: [{ name: 'Flagged message', value: content }] } });
     }
     async channelEvent(before, after, kind) {
         const entry = channelAuditEvent(before, after, kind);
         if (!entry) return;
+        return this.streamEvent({ ...entry, entityId: entry.channelId }, 'channelChanges');
+    }
+    async roleEvent(before, after, kind) {
+        const entry = roleAuditEvent(before, after, kind);
+        if (entry) return this.streamEvent(entry, 'roleChanges');
+    }
+    streamEvent(entry, toggle) {
         // Deduplicate in gateway receipt order, before asynchronous database reads can reorder edits.
         const now = Date.now();
-        const key = `${entry.guildId}:${entry.channelId}`;
+        const key = `${entry.guildId}:${toggle}:${entry.entityId}`;
         const signature = createHash('sha256').update(`${entry.eventType}:${entry.details}`).digest('hex');
         const previous = this.channelEventWindows.get(key);
-        if (previous?.signature === signature && now - previous.at < 5000) return;
+        if (previous?.signature === signature && now - previous.at < 5000) return { ok: true, code: 'duplicate_suppressed' };
         for (const [id, snapshot] of this.channelEventWindows) if (now - snapshot.at > 60000) this.channelEventWindows.delete(id);
         if (this.channelEventWindows.size >= 1000) this.channelEventWindows.delete(this.channelEventWindows.keys().next().value);
         this.channelEventWindows.set(key, { signature, at: now });
-        return this.serverEvent(entry.guildId, 'channelChanges', entry.title, entry.details, entry.channelId, entry.eventType);
+        // Preserve transition order, including genuine rename/revert/rename sequences.
+        const pending = (this.eventTails.get(key) || Promise.resolve()).catch(() => {}).then(() =>
+            this.serverEvent(entry.guildId, toggle, entry.title, entry.details, entry.channelId, entry.eventType, {
+                presentation: entry.presentation || { footer: `${toggle === 'serverChanges' ? 'Server' : 'Channel'} ID: ${entry.entityId}` },
+                claim: { key, signature, ttl: 5000 }
+            }));
+        this.eventTails.set(key, pending);
+        void pending.finally(() => { if (this.eventTails.get(key) === pending) this.eventTails.delete(key); }).catch(() => {});
+        return pending;
     }
-    async serverEvent(guildId, toggle, title, content, channelId, eventType = toggle) {
+    async serverEvent(guildId, toggle, title, content, channelId, eventType = toggle, extra = {}) {
         const config = await this.getConfig(guildId);
         if (!businessActive(config) || !config.auditLogs.enabled || !serverEventEnabled(config.auditLogs, toggle)) return;
-        const omitMessage = ['messageEdits', 'messageDeletes'].includes(toggle) && !config.auditLogs.includeMessageContent;
-        return this.audit(guildId, 'server', eventType, title, omitMessage ? '(content omitted)' : content, { channelId });
+        const omitMessage = ['messageEdits', 'messageDeletes'].includes(toggle) && eventType !== 'message.bulk_deleted' && !config.auditLogs.includeMessageContent;
+        if (omitMessage && extra.presentation) extra = { ...extra, presentation: { ...extra.presentation, fields: extra.presentation.fields?.map(field => ({ ...field, value: '(content omitted)' })) } };
+        return this.audit(guildId, 'server', eventType, title, omitMessage ? '(content omitted)' : content, { channelId, ...extra });
+    }
+    async voiceEvent(before, after) {
+        const user = after.member?.user || before.member?.user;
+        if (user?.bot) return;
+        const title = !before.channelId ? 'Voice channel joined' : !after.channelId ? 'Voice channel left' : 'Voice channel switched';
+        const details = `<@${after.id}>: ${before.channelId ? `<#${before.channelId}>` : 'disconnected'} -> ${after.channelId ? `<#${after.channelId}>` : 'disconnected'}`;
+        return this.streamEvent({ guildId: after.guild.id, entityId: after.id, channelId: after.channelId || before.channelId, title, details, eventType: 'voice.changed',
+            presentation: { userId: after.id, userName: user?.tag || user?.username, avatarUrl: user?.displayAvatarURL?.({ size: 64 }), footer: `User ID: ${after.id}` } }, 'voiceChanges');
+    }
+    async messageUpdated(before, after) {
+        if (!after.guild || after.author?.bot) return;
+        const old = messageSnapshot(before); const current = messageSnapshot(after);
+        if (old.content === current.content && JSON.stringify(old.attachments) === JSON.stringify(current.attachments)) return;
+        if (old.partial && !current.editedAt) return;
+        const config = await this.getConfig(after.guild.id);
+        const fields = [{ name: 'Before', value: messageText(old, config.auditLogs.includeMessageContent) }, { name: 'After', value: messageText(current, config.auditLogs.includeMessageContent) }];
+        const result = await this.serverEvent(after.guild.id, 'messageEdits', 'Message Edited', fields.map(field => `${field.name}:\n${field.value}`).join('\n\n'), after.channelId, 'message.edited', {
+            targetUserId: current.userId, messageId: current.id,
+            claim: { key: `edit:${current.guildId}:${current.id}:${current.editedAt || digest(JSON.stringify([old, current]))}`, signature: 'edited' },
+            presentation: { ...messagePresentation(current), fields, color: 0x379cdb, jumpUrl: `https://discord.com/channels/${current.guildId}/${current.channelId}/${current.id}` }
+        });
+        if (result?.code === 'duplicate_suppressed') return;
+        if (after.author && !after.partial) await this.onMessage(after, true);
+    }
+    async suppressDeletions(guildId, ids) {
+        if (!ids.length) return;
+        await this.store.update(state => {
+            state.suppressedDeletions ||= {};
+            for (const [key, expires] of Object.entries(state.suppressedDeletions)) if (expires < Date.now()) delete state.suppressedDeletions[key];
+            for (const id of ids) state.suppressedDeletions[`${guildId}:${id}`] = Date.now() + 300000;
+        });
+    }
+    async messageDeleted(message) {
+        if (!message.guild || message.author?.bot) return;
+        const state = await this.store.read();
+        if (state.suppressedDeletions?.[`${message.guild.id}:${message.id}`] > Date.now()) return;
+        const snapshot = messageSnapshot(message);
+        const config = state.guilds[message.guild.id] || guildDefaults(message.guild.id);
+        const text = messageText(snapshot, config.auditLogs.includeMessageContent);
+        return this.serverEvent(message.guild.id, 'messageDeletes', 'Message Deleted', text, message.channelId, 'message.deleted', {
+            targetUserId: snapshot.userId, messageId: message.id,
+            claim: { key: `delete:${message.guild.id}:${message.id}`, signature: 'deleted' },
+            presentation: { ...messagePresentation(snapshot), color: 0xe6674b, fields: [{ name: 'Message', value: text }],
+                jumpLabel: 'Jump to Context', jumpUrl: `https://discord.com/channels/${message.guild.id}/${message.channelId}` }
+        });
+    }
+    async messagesBulkDeleted(messages, channel) {
+        const guildId = channel.guildId || channel.guild?.id;
+        if (!guildId) return;
+        const state = await this.store.read();
+        const ids = [...messages.keys()].filter(id => !(state.suppressedDeletions?.[`${guildId}:${id}`] > Date.now())).sort();
+        if (!ids.length) return;
+        return this.serverEvent(guildId, 'messageDeletes', 'Bulk Delete', `${ids.length} messages deleted in <#${channel.id}>.`, channel.id, 'message.bulk_deleted', {
+            claim: { key: `bulk:${guildId}:${channel.id}:${digest(ids.join(','))}`, signature: 'deleted' },
+            presentation: { footer: `Channel ID: ${channel.id}`, fields: [{ name: 'Message IDs', value: ids.join('\n') }], jumpLabel: 'Jump to Context', jumpUrl: `https://discord.com/channels/${guildId}/${channel.id}` }
+        });
     }
     async onMessage(message, edited = false) {
-        if (!message.guild || message.author.bot || !message.member) return;
+        if (!message.guild || !message.author || message.author.bot || !message.member) return;
         const config = await this.getConfig(message.guildId);
-        if (edited) await this.serverEvent(message.guildId, 'messageEdits', 'Message edited', message.content, message.channelId);
         const key = `${message.guildId}:${message.author.id}`;
         const now = Date.now();
         const images = [...message.attachments.values()].filter(attachment => attachment.contentType?.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(attachment.name || '')).length;
@@ -362,6 +462,9 @@ export class BotController {
         const violation = message.member.permissions.has(manage) ? null : findViolation(message, config,
             recent.filter(item => images >= 2 ? true : item.at > now - config.spamWindowSeconds * 1000));
         if (violation) {
+            const accepted = await this.store.update(state => claimEvent(state, { key: `filter:${message.guildId}:${message.id}:${message.editedTimestamp || 'created'}`, signature: 'moderated' }));
+            if (!accepted) return;
+            await this.suppressDeletions(message.guildId, [message.id]);
             await message.delete().catch(error => this.report('Message removal', error));
             const fullMessage = `${message.content || '(no text)'}\n${[...message.attachments.values()].map(item => item.url).join('\n')}`.trim();
             await this.recordCase(message.guildId, 'warn', message.author.id, message.author.tag, this.client.user.id, violation);
@@ -394,7 +497,10 @@ export class BotController {
     }
     async memberChange(member, joined) {
         const config = await this.getConfig(member.guild.id);
-        await this.serverEvent(member.guild.id, 'memberChanges', joined ? 'Member joined' : 'Member left', member.user.tag);
+        const result = await this.streamEvent({ guildId: member.guild.id, entityId: member.id, title: joined ? 'Member joined' : 'Member left', eventType: joined ? 'member.joined' : 'member.left',
+            details: `<@${member.id}> (${member.user.tag || member.user.username})`, presentation: { userId: member.id, userName: member.user.tag || member.user.username,
+                avatarUrl: member.user.displayAvatarURL?.({ size: 64 }), footer: `User ID: ${member.id}` } }, 'memberChanges');
+        if (result?.code === 'duplicate_suppressed') return;
         const channel = member.guild.channels.cache.get(config.welcomeChannelId);
         if (config.enableWelcome && channel?.isTextBased()) await channel.send({ content: (joined ? config.welcomeMessage : config.goodbyeMessage).replaceAll('{user}', member.user.username).replaceAll('{username}', member.user.username).replaceAll('{server}', member.guild.name), allowedMentions: { parse: [] } });
     }

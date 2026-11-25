@@ -40,12 +40,13 @@ test('channel renames and topic changes record readable before/after values', ()
     assert.match(event.details, new RegExp(channelId));
 });
 
-test('channel category, slowmode, age restriction, position and voice changes are tracked', () => {
+test('channel category, slowmode, age restriction and voice changes are tracked but position is ignored', () => {
     const details = channelChanges(channel({ bitrate: 64000, userLimit: 0, rtcRegion: null }), channel({
         parentId: '1505183872705363997', rawPosition: 2, nsfw: true, rateLimitPerUser: 5,
         bitrate: 96000, userLimit: 4, rtcRegion: 'europe'
     })).join('\n');
-    for (const label of ['Category:', 'Position:', 'Age-restricted:', 'Slowmode (seconds):', 'Voice bitrate:', 'Voice member limit:', 'Voice region:']) assert.ok(details.includes(label), label);
+    for (const label of ['Category:', 'Age-restricted:', 'Slowmode (seconds):', 'Voice bitrate:', 'Voice member limit:', 'Voice region:']) assert.ok(details.includes(label), label);
+    assert.doesNotMatch(details, /Position:/);
 });
 
 test('permission overwrite changes include role IDs and allowed/denied permission differences', () => {
@@ -101,17 +102,52 @@ test('duplicate channel packets are suppressed without losing real rename/revert
     assert.equal(state.audit.length, 3);
 });
 
-test('concurrent rename/revert/rename edits survive database responses arriving out of order', async t => {
+test('concurrent rename/revert/rename edits are serialized in receipt order despite database delays', async t => {
     const { bot, config, state } = fixture(t); config.auditLogs.channelChanges = true;
     const getConfig = bot.getConfig.bind(bot); const gates = []; let calls = 0;
     bot.getConfig = async (...args) => { if (++calls <= 3) await new Promise(resolve => { gates.push(resolve); }); return getConfig(...args); };
     const original = channel(); const renamed = channel({ name: 'renamed' });
     const pending = [bot.channelEvent(original, renamed, 'updated'), bot.channelEvent(renamed, original, 'updated'), bot.channelEvent(original, renamed, 'updated')];
-    assert.equal(gates.length, 3);
+    await setImmediate(); assert.equal(gates.length, 1);
     gates[0](); await setImmediate();
-    gates[2](); await setImmediate();
-    gates[1](); await Promise.all(pending);
+    gates[1](); await setImmediate();
+    gates[2](); await Promise.all(pending);
     assert.equal(state.audit.length, 3);
+    assert.match(state.audit[0].details, /general -> renamed/);
+    assert.match(state.audit[1].details, /renamed -> general/);
+});
+
+test('moving one channel and recalculating five positions produces zero logs', async t => {
+    const { bot, config, state, messages } = fixture(t);
+    config.auditLogs.channelChanges = true; config.auditLogs.sendServerEventsToDiscord = true;
+    const events = [];
+    for (let index = 0; index < 5; index++) {
+        const before = channel({ id: String(BigInt(channelId) + BigInt(index)), rawPosition: index });
+        const after = { ...before, rawPosition: (index + 1) % 5 };
+        events.push(bot.channelEvent(before, after, 'updated'), bot.channelEvent(before, after, 'updated'));
+    }
+    await Promise.all(events);
+    assert.equal(state.audit.length, 0); assert.equal(messages.length, 0);
+    await bot.channelEvent(channel(), channel({ name: 'renamed', rawPosition: 5 }), 'updated');
+    assert.equal(state.audit.length, 1); assert.equal(messages.length, 1);
+    assert.doesNotMatch(state.audit[0].details, /Position/);
+});
+
+test('duplicate channel delivery across two workers sharing MySQL state is claimed once', async t => {
+    const { bot, config, state, messages } = fixture(t);
+    config.auditLogs.channelChanges = true; config.auditLogs.sendServerEventsToDiscord = true;
+    const other = new BotController({ store: bot.store, env: {}, version: 'test', logger: quiet });
+    t.after(() => other.destroy());
+    other.logDelivery = bot.logDelivery;
+    await Promise.all([bot.channelEvent(channel(), channel({ name: 'renamed' }), 'updated'), other.channelEvent(channel(), channel({ name: 'renamed' }), 'updated')]);
+    assert.equal(state.audit.length, 1); assert.equal(messages.length, 1);
+});
+
+test('binding the same client twice does not add duplicate event handlers', async t => {
+    const { bot } = fixture(t);
+    const before = bot.client.listenerCount('channelUpdate');
+    bot.bindClient(bot.client);
+    assert.equal(bot.client.listenerCount('channelUpdate'), before);
 });
 
 test('sending a log cannot create a channel-update feedback loop', async t => {

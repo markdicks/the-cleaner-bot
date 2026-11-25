@@ -161,6 +161,7 @@ function trimHistory(state) {
     const since = Date.now() - 30 * 86400000;
     state.audit = state.audit.filter(entry => Date.parse(entry.createdAt) >= since).slice(-10000);
     state.cases = state.cases.slice(-20000);
+    for (const [key, expires] of Object.entries(state.suppressedDeletions || {})) if (expires <= Date.now()) delete state.suppressedDeletions[key];
 }
 
 async function importDotNet(connection, state, env) {

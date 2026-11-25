@@ -83,6 +83,13 @@ test('delivery remains capped at ten messages per minute and test messages have 
     assert.equal(sent.length, 10);
 });
 
+test('concurrent deliveries cannot race past the ten-message budget', async () => {
+    const { delivery, config, sent } = fixture();
+    const results = await Promise.all(Array.from({ length: 40 }, () => delivery.send(guildId, config, 'moderation', 'Warning', 'reason')));
+    assert.equal(sent.length, 10);
+    assert.equal(results.filter(result => result.code === 'rate_limited').length, 30);
+});
+
 test('diagnostic GET checks send no Discord messages', async () => {
     const { delivery, config, sent } = fixture();
     const checks = await delivery.diagnostics(guildId, config);

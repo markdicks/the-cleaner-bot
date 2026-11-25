@@ -1,5 +1,6 @@
-import { EmbedBuilder, PermissionsBitField } from 'discord.js';
+import { PermissionsBitField } from 'discord.js';
 import { businessActive, serverEventEnabled } from './settings.js';
+import { auditPayload } from './audit-payload.js';
 
 const labels = { moderation: 'Moderation actions', automod: 'Flagged words & links', server: 'Server events' };
 const problem = (code, message, action) => ({ ok: false, status: 'blocked', code, message, action });
@@ -42,8 +43,9 @@ export class LogDelivery {
         const missingPermissions = needed.filter(([key]) => !permissions.has(PermissionsBitField.Flags[key])).map(([, label]) => label);
         if (missingPermissions.length) return { ...base, ...channelInfo, missingPermissions, ...problem('permissions_missing', `Missing permissions: ${missingPermissions.join(', ')}.`, 'Open this channel > Edit Channel > Permissions, and allow these permissions for the bot role.') };
         const embedAllowed = permissions.has(PermissionsBitField.Flags.EmbedLinks);
-        const noEvents = category === 'server' && !['messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'channelChanges'].some(key => serverEventEnabled(logs, key));
-        return { ...base, ...channelInfo, channel, embedAllowed, canTest: true, ok: true,
+        const attachAllowed = permissions.has(PermissionsBitField.Flags.AttachFiles);
+        const noEvents = category === 'server' && !['messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'channelChanges', 'roleChanges'].some(key => serverEventEnabled(logs, key));
+        return { ...base, ...channelInfo, channel, embedAllowed, attachAllowed, canTest: true, ok: true,
             status: embedAllowed && !noEvents ? 'ready' : 'warning', code: !embedAllowed ? 'text_only' : noEvents ? 'events_not_selected' : 'ready',
             message: !embedAllowed ? `Text-only delivery to #${channel.name}; Embed Links is missing.` : noEvents ? 'The log channel is ready, but no server-event categories are enabled.' : `Ready to send to #${channel.name}.`,
             action: [!embedAllowed ? 'Allow Embed Links in this channel for rich moderation logs.' : '', noEvents ? 'Enable Channel changes or another event category, then Save audit settings.' : '', channelInfo.usingFallback ? 'The saved audit channel is unavailable; the configured fallback channel will be used.' : ''].filter(Boolean).join(' ') };
@@ -51,14 +53,14 @@ export class LogDelivery {
     async diagnostics(guildId, config) {
         const results = [];
         for (const category of Object.keys(labels)) {
-            const { channel, embedAllowed, ...result } = await this.resolve(guildId, config, category);
+            const { channel, embedAllowed, attachAllowed, ...result } = await this.resolve(guildId, config, category);
             const last = this.last.get(`${guildId}:${category}`);
             results.push({ ...result, lastAttemptAt: last?.lastAttemptAt || null, lastSuccessAt: last?.lastSuccessAt || null,
                 lastFailure: last?.lastFailure || null });
         }
         return results;
     }
-    async send(guildId, config, category, title, details, test = false) {
+    async send(guildId, config, category, title, details, test = false, presentation = {}) {
         const key = `${guildId}:${category}`;
         const previous = this.last.get(key);
         const lastSuccessAt = previous?.lastSuccessAt || null;
@@ -71,17 +73,14 @@ export class LogDelivery {
         const now = Date.now();
         if (test && now - (this.testTimes.get(guildId) || 0) < 10000) return remember(problem('test_cooldown', 'Wait 10 seconds between log tests.', 'Try again shortly.'));
         if (test) this.testTimes.set(guildId, now);
-        const window = (this.windows.get(guildId) || []).filter(time => time > now - 60000);
-        if (window.length >= 10) return remember(problem('rate_limited', 'Discord log delivery is limited to 10 messages per minute for this server.', 'History is retained. Wait a minute before testing again.'));
-        const { channel, embedAllowed, ...check } = await this.resolve(guildId, config, category);
+        const { channel, embedAllowed, attachAllowed, ...check } = await this.resolve(guildId, config, category);
         if (!check.ok) return remember(check);
-        window.push(now); this.windows.set(guildId, window);
-        const payload = { allowedMentions: { parse: [] } };
-        if (embedAllowed) payload.embeds = [new EmbedBuilder().setColor(category === 'automod' ? 0xe6b450 : 0x43b581).setTitle(title.slice(0, 256)).setDescription(String(details || 'No details').slice(0, 4000)).setTimestamp()];
-        else {
-            const content = `${title}\n${details || 'No details'}`;
-            payload.content = content.length > 1900 ? `${content.slice(0, 1850)}\n[Truncated; full content is retained in audit history.]` : content;
-        }
+        // Reserve synchronously after preflight; concurrent events must share the latest budget.
+        const reservedAt = Date.now();
+        const window = (this.windows.get(guildId) || []).filter(time => time > reservedAt - 60000);
+        if (window.length >= 10) return remember(problem('rate_limited', 'Discord log delivery is limited to 10 messages per minute for this server.', 'History is retained. Wait a minute before testing again.'));
+        window.push(reservedAt); this.windows.set(guildId, window);
+        const payload = auditPayload(guildId, category, title, details, presentation, { embedAllowed, attachAllowed });
         try {
             await channel.send(payload);
             return remember({ ...check, message: `Log delivered to #${channel.name}${embedAllowed ? '.' : ' as plain text.'}` });
