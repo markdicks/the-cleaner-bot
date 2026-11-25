@@ -1,5 +1,6 @@
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import { snowflake } from './settings.js';
+import { underlineDiff } from './message-diff.js';
 
 export function auditPayload(guildId, category, title, details, presentation = {}, { embedAllowed, attachAllowed }) {
     const payload = { allowedMentions: { parse: [] } };
@@ -22,10 +23,23 @@ export function auditPayload(guildId, category, title, details, presentation = {
             const name = clip(field.name, 100);
             const size = Math.min(1024, remaining - name.length);
             if (size < 50) { truncated = true; break; }
-            const value = clip(field.value, size);
+            const difference = field.segments ? underlineDiff(field.segments, size) : null;
+            if (difference?.truncated) truncated = true;
+            const value = difference?.value || clip(field.value, size);
             embed.addFields({ name, value }); remaining -= name.length + value.length;
         }
         payload.embeds = [embed];
+    } else if (presentation.fields?.some(field => field.segments)) {
+        let content = clip([title, presentation.description ?? details].filter(Boolean).join('\n'), 500);
+        for (const field of presentation.fields) {
+            const heading = `\n\n${field.name}:\n`;
+            const available = 1850 - content.length - heading.length;
+            if (available < 50) { truncated = true; break; }
+            const difference = field.segments ? underlineDiff(field.segments, available) : null;
+            if (difference?.truncated) truncated = true;
+            content += heading + (difference?.value || clip(field.value, available));
+        }
+        payload.content = content;
     } else payload.content = clip(full, 1900);
     if (truncated && attachAllowed) payload.files = [new AttachmentBuilder(Buffer.from(full, 'utf8'), { name: 'event-details.txt' })];
     const buttons = [];

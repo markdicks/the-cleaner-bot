@@ -215,12 +215,12 @@ test('structured audit history escapes before/after and only renders Discord con
     await store.update(state => {
         state.guilds[guildId].premiumTier = 'Business';
         state.audit.push({ guildId, category: 'server', title: 'Message Edited', details: 'Before and after text', createdAt: new Date().toISOString(),
-            presentation: { description: 'From member', fields: [{ name: 'Before', value: '<script>hostile()</script>' }, { name: 'After', value: 'Updated text' }], footer: 'Message ID: 123', jumpUrl: `https://discord.com/channels/${guildId}/${channelId}` } });
+            presentation: { description: 'From member', fields: [{ name: 'Before', value: '<script>hostile()</script>', segments: [{ text: '<script>hostile()</script>', changed: true }] }, { name: 'After', value: 'Updated text', segments: [{ text: 'Updated', changed: true }, { text: ' text', changed: false }] }], footer: 'Message ID: 123', jumpUrl: `https://discord.com/channels/${guildId}/${channelId}` } });
         state.audit.push({ guildId, category: 'server', title: 'Old entry', details: 'Legacy text', createdAt: new Date().toISOString(), presentation: { jumpUrl: 'javascript:hostile()' } });
     });
     const page = await (await request(`/Dashboard/AuditLogs/${guildId}`, { headers: { cookie: owner.cookie } })).text();
     assert.match(page, /<h4>Before<\/h4>/); assert.match(page, /<h4>After<\/h4>/);
-    assert.match(page, /&lt;script&gt;hostile/); assert.match(page, /Updated text/); assert.match(page, /Legacy text/);
+    assert.match(page, /<u class="edit-change">&lt;script&gt;hostile/); assert.match(page, /<u class="edit-change">Updated<\/u> text/); assert.match(page, /Legacy text/);
     assert.match(page, new RegExp(`https://discord.com/channels/${guildId}/${channelId}`));
     assert.doesNotMatch(page, /javascript:hostile|<script>hostile/);
 });

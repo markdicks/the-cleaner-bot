@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { PermissionsBitField } from 'discord.js';
+import { editSegments } from './message-diff.js';
 
 export const digest = value => createHash('sha256').update(String(value)).digest('hex');
 
@@ -32,6 +33,17 @@ export function messageText(snapshot, contentAllowed) {
     if (!contentAllowed) return '(Message content omitted by server settings.)';
     if (!snapshot || snapshot.content === null) return '(Not cached; Discord did not provide the message content.)';
     return [snapshot.content, ...snapshot.attachments.map(item => item.url)].filter(Boolean).join('\n') || '(No text or attachments.)';
+}
+
+export function messageEditFields(before, after, contentAllowed) {
+    const fields = [{ name: 'Before', value: messageText(before, contentAllowed) }, { name: 'After', value: messageText(after, contentAllowed) }];
+    if (!contentAllowed || before.content === null || after.content === null) return fields;
+    const body = snapshot => [snapshot.content, ...snapshot.attachments.map(item => item.url)].filter(Boolean).join('\n');
+    const oldText = body(before); const newText = body(after);
+    const changes = editSegments(oldText, newText);
+    if (oldText) fields[0].segments = changes.before;
+    if (newText) fields[1].segments = changes.after;
+    return fields;
 }
 
 export function messagePresentation(snapshot) {

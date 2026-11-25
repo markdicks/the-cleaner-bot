@@ -8,7 +8,7 @@ import { normalizeToken } from '../runtime.js';
 import { GatewayConnection } from './connection.js';
 import { LogDelivery } from './logging.js';
 import { channelAuditEvent } from './channel-audit.js';
-import { claimEvent, digest, messagePresentation, messageSnapshot, messageText, roleAuditEvent } from './audit-events.js';
+import { claimEvent, digest, messageEditFields, messagePresentation, messageSnapshot, messageText, roleAuditEvent } from './audit-events.js';
 
 const manage = PermissionsBitField.Flags.ManageGuild;
 const option = (name, description, type, required = false) => ({ name, description, type, required });
@@ -391,7 +391,7 @@ export class BotController {
         const config = await this.getConfig(guildId);
         if (!businessActive(config) || !config.auditLogs.enabled || !serverEventEnabled(config.auditLogs, toggle)) return;
         const omitMessage = ['messageEdits', 'messageDeletes'].includes(toggle) && eventType !== 'message.bulk_deleted' && !config.auditLogs.includeMessageContent;
-        if (omitMessage && extra.presentation) extra = { ...extra, presentation: { ...extra.presentation, fields: extra.presentation.fields?.map(field => ({ ...field, value: '(content omitted)' })) } };
+        if (omitMessage && extra.presentation) extra = { ...extra, presentation: { ...extra.presentation, fields: extra.presentation.fields?.map(field => ({ name: field.name, value: '(content omitted)' })) } };
         return this.audit(guildId, 'server', eventType, title, omitMessage ? '(content omitted)' : content, { channelId, ...extra });
     }
     async voiceEvent(before, after) {
@@ -408,7 +408,7 @@ export class BotController {
         if (old.content === current.content && JSON.stringify(old.attachments) === JSON.stringify(current.attachments)) return;
         if (old.partial && !current.editedAt) return;
         const config = await this.getConfig(after.guild.id);
-        const fields = [{ name: 'Before', value: messageText(old, config.auditLogs.includeMessageContent) }, { name: 'After', value: messageText(current, config.auditLogs.includeMessageContent) }];
+        const fields = messageEditFields(old, current, config.auditLogs.includeMessageContent);
         const result = await this.serverEvent(after.guild.id, 'messageEdits', 'Message Edited', fields.map(field => `${field.name}:\n${field.value}`).join('\n\n'), after.channelId, 'message.edited', {
             targetUserId: current.userId, messageId: current.id,
             claim: { key: `edit:${current.guildId}:${current.id}:${current.editedAt || digest(JSON.stringify([old, current]))}`, signature: 'edited' },

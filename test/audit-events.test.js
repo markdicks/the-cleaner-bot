@@ -39,7 +39,9 @@ test('edited messages have Before/After, IDs, author, channel and buttons, with 
     await bot.messageUpdated(before, after);
     assert.equal(messages.length, 1); assert.equal(state.audit.length, 1);
     const data = messages[0].embeds[0].toJSON();
-    assert.equal(data.fields[0].value, 'Original text'); assert.equal(data.fields[1].value, 'Edited text');
+    assert.equal(data.fields[0].value, '__Original__ text'); assert.equal(data.fields[1].value, '__Edited__ text');
+    assert.equal(state.audit[0].presentation.fields[0].value, 'Original text');
+    assert.equal(state.audit[0].presentation.fields[1].value, 'Edited text');
     assert.match(data.description, new RegExp(userId)); assert.match(data.description, new RegExp(channelId));
     assert.match(data.footer.text, new RegExp(messageId)); assert.equal(data.author.name, 'member');
     assert.equal(messages[0].components[0].components[0].data.label, 'Get User ID');
@@ -74,6 +76,15 @@ test('content privacy redacts Before/After, deleted text, attachments, history a
     await bot.messageDeleted(message({ content: 'private-delete', attachments }));
     assert.doesNotMatch(JSON.stringify([state.audit, messages]), /private-before|private-after|private-delete|private\.png/);
     assert.match(JSON.stringify(state.audit), new RegExp(userId));
+});
+
+test('turning content privacy off before delivery also strips already-built diff segments', async t => {
+    const { bot, config, state, messages } = fixture(t); config.auditLogs.includeMessageContent = false;
+    await bot.serverEvent(guildId, 'messageEdits', 'Message Edited', 'sensitive raw text', channelId, 'message.edited', {
+        presentation: { description: 'Message metadata', fields: [{ name: 'Before', value: 'sensitive raw text', segments: [{ text: 'sensitive diff', display: 'sensitive display', changed: true }] }] }
+    });
+    assert.doesNotMatch(JSON.stringify([state.audit, messages]), /sensitive/);
+    assert.equal(state.audit[0].presentation.fields[0].segments, undefined);
 });
 
 test('a native bulk delete creates one summary, not one log for every message', async t => {

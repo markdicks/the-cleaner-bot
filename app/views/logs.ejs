@@ -4,7 +4,7 @@
 <section class="section"><div class="section-heading"><h2>History</h2><span class="muted">30-day retention</span></div><% if (!entries.length) { %><div class="empty compact"><i data-lucide="scroll-text"></i><p>No matching events.</p></div><% } else { %><div class="audit-list"><% entries.forEach(entry => { %><article class="audit-entry"><div><span class="badge"><%= entry.category %></span><time class="muted" datetime="<%= entry.createdAt %>"><%= new Date(entry.createdAt).toLocaleString('en-GB', { timeZone: 'UTC' }) %> UTC</time></div><h3><%= entry.title %></h3>
     <% const display = entry.presentation; %>
     <p class="message-content"><%= display?.description ?? entry.details %></p>
-    <% for (const field of display?.fields || []) { %><h4><%= field.name %></h4><p class="message-content"><%= field.value %></p><% } %>
+    <% for (const field of display?.fields || []) { %><h4><%= field.name %></h4><p class="message-content"><% if (field.segments?.length) { for (const part of field.segments) { if (part.changed) { %><u class="edit-change"><%= part.display ?? part.text %></u><% } else { %><%= part.text %><% } } } else { %><%= field.value %><% } %></p><% } %>
     <% if (display?.footer) { %><small class="muted message-content"><%= display.footer %></small><% } %>
     <% if (/^https:\/\/discord\.com\/channels\/\d{17,20}\/\d{17,20}(?:\/\d{17,20})?$/.test(display?.jumpUrl || '')) { %><p><a href="<%= display.jumpUrl %>" target="_blank" rel="noopener noreferrer"><%= display.jumpLabel || 'Jump to Message' %></a></p><% } %>
 </article><% }); %></div><% } %></section>
