@@ -89,3 +89,13 @@ test('diagnostic GET checks send no Discord messages', async () => {
     assert.equal(checks.length, 3); assert.equal(sent.length, 0);
     assert.equal(checks[2].code, 'server_delivery_disabled');
 });
+
+test('a ready server log channel warns when no event categories are enabled', async () => {
+    const { delivery, config } = fixture();
+    config.auditLogs.sendServerEventsToDiscord = true; config.auditLogs.serverChannelId = channelId;
+    const first = (await delivery.diagnostics(guildId, config))[2];
+    assert.equal(first.code, 'events_not_selected'); assert.equal(first.canTest, true);
+    assert.match(first.action, /Channel changes/);
+    config.auditLogs.channelChanges = true;
+    assert.equal((await delivery.diagnostics(guildId, config))[2].code, 'ready');
+});

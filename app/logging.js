@@ -1,5 +1,5 @@
 import { EmbedBuilder, PermissionsBitField } from 'discord.js';
-import { businessActive } from './settings.js';
+import { businessActive, serverEventEnabled } from './settings.js';
 
 const labels = { moderation: 'Moderation actions', automod: 'Flagged words & links', server: 'Server events' };
 const problem = (code, message, action) => ({ ok: false, status: 'blocked', code, message, action });
@@ -42,10 +42,11 @@ export class LogDelivery {
         const missingPermissions = needed.filter(([key]) => !permissions.has(PermissionsBitField.Flags[key])).map(([, label]) => label);
         if (missingPermissions.length) return { ...base, ...channelInfo, missingPermissions, ...problem('permissions_missing', `Missing permissions: ${missingPermissions.join(', ')}.`, 'Open this channel > Edit Channel > Permissions, and allow these permissions for the bot role.') };
         const embedAllowed = permissions.has(PermissionsBitField.Flags.EmbedLinks);
+        const noEvents = category === 'server' && !['messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'channelChanges'].some(key => serverEventEnabled(logs, key));
         return { ...base, ...channelInfo, channel, embedAllowed, canTest: true, ok: true,
-            status: embedAllowed ? 'ready' : 'warning', code: embedAllowed ? 'ready' : 'text_only',
-            message: embedAllowed ? `Ready to send to #${channel.name}.` : `Text-only delivery to #${channel.name}; Embed Links is missing.`,
-            action: !embedAllowed ? 'Allow Embed Links in this channel for rich moderation logs.' : channelInfo.usingFallback ? 'The saved audit channel is unavailable; the configured fallback channel will be used.' : '' };
+            status: embedAllowed && !noEvents ? 'ready' : 'warning', code: !embedAllowed ? 'text_only' : noEvents ? 'events_not_selected' : 'ready',
+            message: !embedAllowed ? `Text-only delivery to #${channel.name}; Embed Links is missing.` : noEvents ? 'The log channel is ready, but no server-event categories are enabled.' : `Ready to send to #${channel.name}.`,
+            action: [!embedAllowed ? 'Allow Embed Links in this channel for rich moderation logs.' : '', noEvents ? 'Enable Channel changes or another event category, then Save audit settings.' : '', channelInfo.usingFallback ? 'The saved audit channel is unavailable; the configured fallback channel will be used.' : ''].filter(Boolean).join(' ') };
     }
     async diagnostics(guildId, config) {
         const results = [];

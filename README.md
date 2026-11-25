@@ -9,7 +9,7 @@ This repository now contains the **Node.js management application and Discord bo
 - Entry file: **index.js**. Build command: **none**. Start command if requested: **npm start**.
 - Keep the existing `DISCORD_TOKEN` environment variable. No token belongs in source control.
 - Set `PUBLIC_URL=https://thecleanerbot.space` (or your actual HTTPS origin).
-- Redeploy the latest commit. `/api/status` reports application version **2.1.2**, storage provider/status, and bot connection diagnostics. Credentials are never included.
+- Redeploy the latest commit. `/api/status` reports application version **2.1.3**, storage provider/status, and bot connection diagnostics. Credentials are never included.
 
 The entry remains synchronously loadable by Hostinger's CommonJS launcher. The HTTP listener starts before database initialization or Discord login; bad bot credentials do not terminate the website. No SDK downloads or extra child processes are started.
 
@@ -62,7 +62,7 @@ Old `DATA_DIRECTORY/botConfig.json` cleaning settings are imported once and scop
 - Business/Enterprise audit history, message content, search, CSV, 30-day retention. Server events are opt-in; Discord log delivery is capped at 10 messages per server per minute.
 - Chat XP and voice XP. Voice XP needs **2+ human members** in the same voice channel; muted users qualify, deafened users and bots do not.
 - Existing cleaning commands: `/current-interval`, `/add-bot`, `/remove-bot`, `/modify-interval`, `/configure`, `/set-log-channel`, `/add-monitor-channel`.
-- Additional `/dashboard`, `/warn`, `/timeout`, `/kick`, `/ban`, `/purge`, `/rank`, `/leaderboard`. The bot's Playing activity shows `version 2.1.2`.
+- Additional `/dashboard`, `/warn`, `/timeout`, `/kick`, `/ban`, `/purge`, `/rank`, `/leaderboard`. The bot's Playing activity shows `version 2.1.3`.
 
 Enable **Server Members Intent** and **Message Content Intent** in Discord's Developer Portal, then enable privileged intents in Superadmin for content filtering and member welcome events. Saving a changed token or intent setting automatically reconnects the bot. The app preserves the existing basic-intent connection by default; it displays filter availability accurately.
 
@@ -74,6 +74,8 @@ Enable **Server Members Intent** and **Message Content Intent** in Discord's Dev
 - **Server > Audit logs > Log channel connection** checks the destination, current server membership, channel access, and send permissions. It fetches uncached channels within that server, checks any explicitly configured fallback channel, and never sends to another server. Missing Embed Links falls back to plain text with mentions disabled.
 - Each log category has an explicit **Send test log** button. Page loads and checks do not post messages. Tests have a ten-second cooldown and share the existing ten-messages-per-minute delivery cap. Failed sends are visible in diagnostics; stored moderation cases and enabled audit history are retained.
 - Business/Enterprise logs also capture native Discord bans, kicks, timeouts/mutes and AutoMod executions. Bot-issued audit events and repeated rule-action notifications are deduplicated. Server-settings noise remains excluded; server-event delivery stays opt-in.
+- Enable **Channel changes** under **Server > Audit logs > Audit logging**, alongside **Send server events to Discord** and a **Server events** destination, to log channel creation/deletion and edits to names, topics, permissions, categories, position, slowmode, age restrictions and voice settings. Logs show before/after values. Only subsequent events are captured; previous edits are not backfilled.
+- Channel activity counters and last-message IDs are ignored, and duplicate packets are suppressed without suppressing real rename/revert sequences. The ten-messages-per-minute cap remains in place while enabled audit history retains distinct changes. If no server-event categories are enabled, the channel check now explains that explicitly. For older Node settings without `channelChanges`, the existing `serverChanges` preference is respected until the channel toggle is saved explicitly.
 
 Discord-native moderation observation needs **View Audit Log** on the bot role. Native AutoMod event observation needs **Manage Server**, and full flagged text needs the **Message Content** intent. These requirements are shown in the log checks; permissions are not silently granted. See the official [Discord gateway event requirements](https://docs.discord.com/developers/events/gateway-events#auto-moderation-action-execution) and [privileged intent requirements](https://docs.discord.com/developers/events/gateway#privileged-intents).
 

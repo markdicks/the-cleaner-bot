@@ -11,8 +11,9 @@
         <% } %>
         </div>
         <div class="toggle-grid">
-        <% for (const [key, label] of [['enabled','Audit logging'],['moderationActions','Moderation actions'],['autoModActions','AutoMod actions'],['includeMessageContent','Include flagged message content'],['sendServerEventsToDiscord','Send server events to Discord'],['messageEdits','Message edits'],['messageDeletes','Message deletions'],['memberChanges','Member changes'],['voiceChanges','Voice changes'],['serverChanges','Server name changes']]) { %>
-            <label class="toggle-row"><span><%= label %></span><input class="switch" type="checkbox" name="<%= key %>" <%= guild.auditLogs[key] === true || (['moderationActions','autoModActions'].includes(key) && guild.auditLogs[key] === undefined) ? 'checked' : '' %>></label>
+        <% for (const [key, label] of [['enabled','Audit logging'],['moderationActions','Moderation actions'],['autoModActions','AutoMod actions'],['includeMessageContent','Include flagged message content'],['sendServerEventsToDiscord','Send server events to Discord'],['messageEdits','Message edits'],['messageDeletes','Message deletions'],['memberChanges','Member changes'],['voiceChanges','Voice changes'],['serverChanges','Server name changes'],['channelChanges','Channel changes']]) { %>
+            <% const checked = key === 'channelChanges' ? (guild.auditLogs.channelChanges ?? guild.auditLogs.serverChanges) : guild.auditLogs[key] === true || (['moderationActions','autoModActions'].includes(key) && guild.auditLogs[key] === undefined); %>
+            <label class="toggle-row"><span><%= label %></span><input class="switch" type="checkbox" name="<%= key %>" <%= checked ? 'checked' : '' %>></label>
         <% } %>
         </div>
         <div class="form-actions"><button class="button primary"><i data-lucide="save"></i>Save audit settings</button></div>

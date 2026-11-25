@@ -127,6 +127,18 @@ test('server channel settings persist and reject cross-server IDs', async t => {
     assert.equal((await store.read()).guilds[guildId].levelsChannelId, channelId);
 });
 
+test('Channel changes is visible and saved on the audit settings page, including legacy preferences', async t => {
+    const { request, session, store } = await fixture(t);
+    const owner = session();
+    await store.update(state => { const config = state.guilds[guildId]; config.premiumTier = 'Business'; delete config.auditLogs.channelChanges; config.auditLogs.serverChanges = true; });
+    const legacyPage = await (await request(`/Dashboard/Guild/${guildId}?tab=logs`, { headers: { cookie: owner.cookie } })).text();
+    assert.match(legacyPage, /name="channelChanges"\s+checked/);
+    const saved = await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, section: 'logs', enabled: 'on', moderationActions: 'on', autoModActions: 'on', sendServerEventsToDiscord: 'on', serverChannelId: channelId, channelChanges: 'on' }) });
+    assert.equal(saved.status, 302); assert.match(saved.headers.get('location'), /Settings%20saved/);
+    const config = (await store.read()).guilds[guildId];
+    assert.equal(config.auditLogs.channelChanges, true); assert.equal(config.auditLogs.serverChanges, false);
+});
+
 test('uppercase legacy credentials remain environment-managed on the owner settings page', async t => {
     const { request, session, store } = await fixture(t, { BOT__DISCORDCLIENTID: '123456789012345679', BOT__DISCORDCLIENTSECRET: 'uppercase-private-secret', BOT__DISCORDBOTTOKEN: 'uppercase-private-token' });
     const owner = session();

@@ -2,7 +2,7 @@
     <div class="section-heading"><h2>Log channel connection</h2><a href="?tab=logs">Refresh checks</a></div>
     <% for (const check of logChecks) { %>
     <article class="log-check">
-        <div class="log-check-heading"><h3><%= check.label %></h3><span class="badge <%= check.ok && !check.lastFailure ? 'success' : 'warning' %>"><%= check.lastFailure ? 'Delivery failed' : check.status === 'ready' ? 'Ready' : check.status === 'warning' ? 'Text-only' : 'Action required' %></span></div>
+        <div class="log-check-heading"><h3><%= check.label %></h3><span class="badge <%= check.ok && check.status === 'ready' && !check.lastFailure ? 'success' : 'warning' %>"><%= check.lastFailure ? 'Delivery failed' : check.status === 'ready' ? 'Ready' : check.status === 'warning' ? 'Limited' : 'Action required' %></span></div>
         <p><%= check.message %></p>
         <% if (check.action) { %><p class="muted"><%= check.action %></p><% } %>
         <% if (check.observationWarning) { %><p class="text-warning"><%= check.observationWarning %></p><% } %>

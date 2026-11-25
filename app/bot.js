@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { AuditLogEvent, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { credentials, randomToken } from './security.js';
-import { businessActive, guildDefaults, snowflake } from './settings.js';
+import { businessActive, guildDefaults, serverEventEnabled, snowflake } from './settings.js';
 import { normalizeToken } from '../runtime.js';
 import { GatewayConnection } from './connection.js';
 import { LogDelivery } from './logging.js';
+import { channelAuditEvent } from './channel-audit.js';
 
 const manage = PermissionsBitField.Flags.ManageGuild;
 const option = (name, description, type, required = false) => ({ name, description, type, required });
@@ -51,6 +52,7 @@ export class BotController {
         this.pendingSetups = new Map(); this.windows = new Map(); this.voiceSince = new Map(); this.cleaningRuns = new Map();
         this.origin = env.PUBLIC_URL || ''; this.maintenanceBusy = false;
         this.nativeEvents = new Map();
+        this.channelEventWindows = new Map();
         this.connection = new GatewayConnection({ createClient, readyTimeoutMs, logger, bindClient: client => this.bindClient(client) });
         this.logDelivery = new LogDelivery({ getClient: () => this.client, isReady: () => this.isReady(), logger });
     }
@@ -70,6 +72,9 @@ export class BotController {
         on('guildMemberAdd', member => this.memberChange(member, true));
         on('guildMemberRemove', member => this.memberChange(member, false));
         on('guildUpdate', (before, after) => { if (before.name !== after.name) return this.serverEvent(after.id, 'serverChanges', 'Server renamed', `${before.name} -> ${after.name}`); });
+        on('channelCreate', channel => this.channelEvent(null, channel, 'created'));
+        on('channelUpdate', (before, after) => this.channelEvent(before, after, 'updated'));
+        on('channelDelete', channel => this.channelEvent(channel, null, 'deleted'));
         on('guildAuditLogEntryCreate', (entry, guild) => this.nativeModeration(entry, guild));
         on('autoModerationActionExecution', execution => this.nativeAutoMod(execution));
         on('voiceStateUpdate', (before, after) => {
@@ -324,10 +329,25 @@ export class BotController {
         if (this.seenNativeEvent(`automod:${guildId}:${execution.messageId || hash}`)) return;
         await this.audit(guildId, 'automod', 'discord.automod', 'Discord AutoMod flagged a message', `Member: ${execution.userId}\nChannel: ${execution.channelId || 'unknown'}\n${content}`, { targetUserId: execution.userId, channelId: execution.channelId });
     }
-    async serverEvent(guildId, toggle, title, content, channelId) {
+    async channelEvent(before, after, kind) {
+        const entry = channelAuditEvent(before, after, kind);
+        if (!entry) return;
+        // Deduplicate in gateway receipt order, before asynchronous database reads can reorder edits.
+        const now = Date.now();
+        const key = `${entry.guildId}:${entry.channelId}`;
+        const signature = createHash('sha256').update(`${entry.eventType}:${entry.details}`).digest('hex');
+        const previous = this.channelEventWindows.get(key);
+        if (previous?.signature === signature && now - previous.at < 5000) return;
+        for (const [id, snapshot] of this.channelEventWindows) if (now - snapshot.at > 60000) this.channelEventWindows.delete(id);
+        if (this.channelEventWindows.size >= 1000) this.channelEventWindows.delete(this.channelEventWindows.keys().next().value);
+        this.channelEventWindows.set(key, { signature, at: now });
+        return this.serverEvent(entry.guildId, 'channelChanges', entry.title, entry.details, entry.channelId, entry.eventType);
+    }
+    async serverEvent(guildId, toggle, title, content, channelId, eventType = toggle) {
         const config = await this.getConfig(guildId);
-        if (!businessActive(config) || !config.auditLogs[toggle]) return;
-        await this.audit(guildId, 'server', toggle, title, config.auditLogs.includeMessageContent ? content : '(content omitted)', { channelId });
+        if (!businessActive(config) || !config.auditLogs.enabled || !serverEventEnabled(config.auditLogs, toggle)) return;
+        const omitMessage = ['messageEdits', 'messageDeletes'].includes(toggle) && !config.auditLogs.includeMessageContent;
+        return this.audit(guildId, 'server', eventType, title, omitMessage ? '(content omitted)' : content, { channelId });
     }
     async onMessage(message, edited = false) {
         if (!message.guild || message.author.bot || !message.member) return;
