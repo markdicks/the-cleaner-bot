@@ -1,0 +1,2 @@
+<% const names = { rules: 'Filters', words: 'Blocked words', ignored: 'Ignored channels', member: 'Member action', purge: 'Purge messages', settings: 'Settings', channels: 'Log channels', events: 'Server events', checks: 'Delivery checks', leaderboard: 'Leaderboard' }; %>
+<nav class="module-tabs" aria-label="<%= title %> views"><% for (const key of views) { %><a href="<%= serverUrl(guild.guildId, tab, key) %>" class="<%= view === key ? 'selected' : '' %>" <%- view === key ? 'aria-current="page"' : '' %>><%= names[key] %></a><% } %></nav>

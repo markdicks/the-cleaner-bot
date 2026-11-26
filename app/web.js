@@ -5,12 +5,17 @@ import { PermissionsBitField } from 'discord.js';
 import { environmentCredentials } from './environment.js';
 import { businessActive, guildDefaults, snowflake, validateGuildSettings } from './settings.js';
 import { clearCookie, credentials, equalToken, publicOrigin, randomToken, readCookie, seal, secretKey, writeCookie } from './security.js';
+import { serverNavigation, serverPage, serverUrl, settingsDestination, settingsSearch } from './navigation.js';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const sessionCookie = 'CleanerSession';
 const oauthCookie = 'CleanerOAuth';
 const manageable = guild => guild.owner || (BigInt(guild.permissions || '0') & 0x28n) !== 0n;
 const csrfError = () => Object.assign(new Error('The form expired. Reload the page and try again.'), { status: 403 });
+const csvCell = value => {
+    const text = String(value ?? '');
+    return `"${(/^\s*[=+\-@]/.test(text) || /^[\t\r]/.test(text) ? `'${text}` : text).replaceAll('"', '""')}"`;
+};
 
 export function createDashboard({ store, bot, version, env = process.env, getStatus, fetcher = fetch, logger = console }) {
     const app = express();
@@ -29,6 +34,7 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
         response.locals.message = typeof request.query.message === 'string' ? request.query.message.slice(0, 500) : '';
         response.locals.notice = '';
         response.locals.storageMode = store.mode;
+        Object.assign(response.locals, { guild: null, serverChoices: [], selectedTab: '', serverNavigation, settingsSearch, serverUrl });
         next();
     });
     app.use('/assets', express.static(path.join(directory, 'public'), { maxAge: '1y', immutable: true, index: false }));
@@ -64,6 +70,17 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
         if (request.session.id !== request.creds.superAdminId) return response.status(403).render('error', { title: 'Access denied', detail: 'This page is restricted to the bot owner.' });
         next();
     };
+    const accessibleGuilds = async request => {
+        if (request.manageableGuilds) return request.manageableGuilds;
+        const live = new Map(bot.guilds().map(guild => [guild.id, guild]));
+        const guilds = [];
+        for (const id of new Set([...live.keys(), ...Object.keys(request.state.guilds)])) {
+            if (!await bot.canManage(id, request.session.id, request.session.guildIds)) continue;
+            const config = request.state.guilds[id] || guildDefaults(id);
+            guilds.push({ ...config, ...live.get(id), id, name: live.get(id)?.name || config.guildName, memberCount: live.get(id)?.memberCount || 0 });
+        }
+        return request.manageableGuilds = guilds.sort((a, b) => a.name.localeCompare(b.name));
+    };
     const guildAccess = async (request, response, next) => {
         if (!request.session) return response.status(200).render('login');
         const id = request.params.guildId;
@@ -73,6 +90,7 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
         response.locals.guild = request.config;
         response.locals.channels = request.channels;
         response.locals.business = businessActive(request.config);
+        response.locals.serverChoices = await accessibleGuilds(request);
         next();
     };
     const issueSession = (request, response, user, lifetime = 43200000) => {
@@ -121,22 +139,26 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
     app.post('/Auth/Logout', (request, response) => { clearCookie(response, sessionCookie, request.origin.startsWith('https:')); response.redirect('/Dashboard'); });
     app.get('/Auth/Logout', (request, response) => response.redirect('/Dashboard'));
     app.get('/Dashboard', authenticate, async (request, response) => {
-        const live = new Map(bot.guilds().map(guild => [guild.id, guild]));
-        const ids = [...new Set([...live.keys(), ...Object.keys(request.state.guilds)])];
-        const guilds = [];
-        for (const id of ids) {
-            if (!await bot.canManage(id, request.session.id, request.session.guildIds)) continue;
-            const config = request.state.guilds[id] || guildDefaults(id);
-            guilds.push({ ...config, ...live.get(id), id, name: live.get(id)?.name || config.guildName, memberCount: live.get(id)?.memberCount || 0 });
-        }
-        guilds.sort((a, b) => a.name.localeCompare(b.name));
+        const guilds = await accessibleGuilds(request);
         response.render('dashboard', { guilds, cases: request.state.cases.filter(entry => guilds.some(guild => guild.id === entry.guildId)).slice(-8).reverse(), contentAccess: bot.contentAccess });
     });
     app.get('/Dashboard/Guild/:guildId', guildAccess, async (request, response) => {
-        const validTabs = ['overview', 'moderation', 'channels', 'logs', 'cleaner', 'cases', 'levels'];
-        const tab = validTabs.includes(request.query.tab) ? request.query.tab : 'overview';
-        response.render('guild', { tab, contentAccess: bot.contentAccess, logChecks: tab === 'logs' ? await bot.loggingDiagnostics(request.params.guildId, request.config) : [],
-            cases: request.state.cases.filter(entry => entry.guildId === request.params.guildId).slice(-100).reverse(),
+        const page = serverPage(request.query.tab, request.query.view);
+        if (page.tab === 'activity') return response.redirect(serverUrl(request.params.guildId, 'activity'));
+        response.locals.selectedTab = page.tab;
+        const query = String(request.query.q || '').slice(0, 200).trim();
+        const actionFilter = ['warn', 'timeout', 'untimeout', 'mute', 'unmute', 'kick', 'ban', 'unban'].includes(request.query.action) ? request.query.action : '';
+        const allCases = request.state.cases.filter(entry => entry.guildId === request.params.guildId).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id);
+        const matches = allCases.filter(entry => (!actionFilter || String(entry.action).toLowerCase() === actionFilter) && (!query || `${entry.id} #${entry.id} ${entry.targetUserTag || ''} ${entry.targetUserId || ''} ${entry.moderatorUserId || ''} ${entry.reason || ''}`.toLowerCase().includes(query.toLowerCase())));
+        if (page.tab === 'cases' && request.query.format === 'csv') return response.type('text/csv').attachment(`cases-${request.params.guildId}.csv`).send([
+            'Case,Time,Action,User ID,User,Moderator ID,Reason', ...matches.map(entry => [entry.id, entry.createdAt, entry.action, entry.targetUserId, entry.targetUserTag, entry.moderatorUserId, entry.reason].map(csvCell).join(','))
+        ].join('\r\n'));
+        const pageCount = Math.max(1, Math.ceil(matches.length / 25));
+        const casePage = Math.min(pageCount, Math.max(1, Number.parseInt(request.query.page, 10) || 1));
+        response.render('guild', { ...page, contentAccess: bot.contentAccess, logChecks: page.tab === 'logs' && page.view === 'checks' ? await bot.loggingDiagnostics(request.params.guildId, request.config) : [],
+            cases: page.tab === 'cases' ? matches.slice((casePage - 1) * 25, casePage * 25) : allCases.slice(0, 8), query, actionFilter, casePage, pageCount, caseCount: matches.length, totalCases: allCases.length,
+            roles: [...(bot.client?.guilds.cache.get(request.params.guildId)?.roles?.cache.values() || [])].map(role => ({ id: role.id, name: role.name })).sort((a, b) => a.name.localeCompare(b.name)),
+            selectedUser: snowflake(request.query.userId) ? request.query.userId : '',
             levels: Object.values(request.state.levels).filter(entry => entry.guildId === request.params.guildId).sort((a, b) => b.xp - a.xp).slice(0, 100) });
     });
     app.get('/Dashboard/Guild/:guildId/diagnostics', guildAccess, async (request, response) => {
@@ -147,14 +169,14 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
         if (request.body.category !== 'moderation' && !businessActive(request.config)) throw Object.assign(new Error('Business or Enterprise is required for this log category.'), { status: 403 });
         const result = await bot.testLog(request.params.guildId, request.body.category);
         const message = [result.message, result.ok ? '' : result.action].filter(Boolean).join(' ').slice(0, 500);
-        response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=logs&message=${encodeURIComponent(message)}`);
+        response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=logs&view=checks&message=${encodeURIComponent(message)}`);
     });
     app.post('/Dashboard/Guild/:guildId', guildAccess, async (request, response) => {
         try {
-            if (!request.channels.length && ['channels', 'cleaner', 'logs'].includes(request.body.section)) throw new Error('Reconnect the bot and restore channel access before changing channel settings. Existing settings were retained.');
+            if (!request.channels.length && ['channels', 'cleaner', 'logs', 'logDestinations', 'logEvents', 'ignored', 'levelSettings', 'welcome', 'general'].includes(request.body.section)) throw new Error('Reconnect the bot and restore channel access before changing channel settings. Existing settings were retained.');
             await store.update(state => { state.guilds[request.params.guildId] = validateGuildSettings(request.body, state.guilds[request.params.guildId] || request.config, request.channels); });
-            response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=${encodeURIComponent(request.body.section)}&message=Settings%20saved.`);
-        } catch (error) { response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=${encodeURIComponent(request.body.section || 'overview')}&message=${encodeURIComponent(error.message.slice(0, 300))}`); }
+            response.redirect(`/Dashboard/Guild/${request.params.guildId}?${new URLSearchParams({ ...settingsDestination(request.body.section), message: 'Settings saved.' })}`);
+        } catch (error) { response.redirect(`/Dashboard/Guild/${request.params.guildId}?${new URLSearchParams({ ...settingsDestination(request.body.section), message: error.message.slice(0, 300) })}`); }
     });
     app.post('/Dashboard/Guild/:guildId/action', guildAccess, async (request, response) => {
         if (request.body.confirm !== 'on') throw Object.assign(new Error('Confirm the moderation action before submitting.'), { status: 400 });
@@ -165,21 +187,17 @@ export function createDashboard({ store, bot, version, env = process.env, getSta
                 const deleted = await bot.purge(request.params.guildId, { channelId: request.body.channelId, count: request.body.count, userId: request.body.userId, roleId: request.body.roleId, bots: request.body.bots === 'on', contains: request.body.contains }, request.session.id);
                 message = `Deleted ${deleted} messages.`;
             } else await bot.moderate(request.params.guildId, request.body.action, request.body.userId, String(request.body.reason || '').trim(), request.session.id, Number(request.body.minutes));
-            response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=cases&message=${encodeURIComponent(message)}`);
-        } catch (error) { response.redirect(`/Dashboard/Guild/${request.params.guildId}?tab=cases&message=${encodeURIComponent(error.code ? `Discord action failed (${error.code}). Check bot permissions and role order.` : error.message.slice(0, 300))}`); }
+            response.redirect(`/Dashboard/Guild/${request.params.guildId}?${new URLSearchParams({ tab: 'actions', view: request.body.action === 'purge' ? 'purge' : 'member', message })}`);
+        } catch (error) { response.redirect(`/Dashboard/Guild/${request.params.guildId}?${new URLSearchParams({ tab: 'actions', view: request.body.action === 'purge' ? 'purge' : 'member', message: error.code ? `Discord action failed (${error.code}). Check bot permissions and role order.` : error.message.slice(0, 300) })}`); }
     });
     app.get('/Dashboard/AuditLogs/:guildId', guildAccess, (request, response) => {
+        response.locals.selectedTab = 'activity';
         if (!businessActive(request.config)) return response.status(403).render('error', { title: 'Business plan required', detail: 'Audit history is available on Business and Enterprise.' });
         const query = String(request.query.q || '').slice(0, 200).toLowerCase();
         const category = ['moderation', 'automod', 'server'].includes(request.query.category) ? request.query.category : '';
         const entries = request.state.audit.filter(entry => entry.guildId === request.params.guildId && (!category || entry.category === category) && (!query || `${entry.title} ${entry.details} ${entry.targetUserId || ''}`.toLowerCase().includes(query))).reverse();
         if (request.query.format === 'csv') {
-            const cell = value => {
-                const text = String(value ?? '');
-                const safe = /^\s*[=+\-@]/.test(text) || /^[\t\r]/.test(text) ? `'${text}` : text;
-                return `"${safe.replaceAll('"', '""')}"`;
-            };
-            response.type('text/csv').attachment(`audit-${request.params.guildId}.csv`).send(['Time,Category,Event,Details', ...entries.slice(0, 1000).map(entry => [entry.createdAt, entry.category, entry.title, entry.details].map(cell).join(','))].join('\r\n'));
+            response.type('text/csv').attachment(`audit-${request.params.guildId}.csv`).send(['Time,Category,Event,Details', ...entries.slice(0, 1000).map(entry => [entry.createdAt, entry.category, entry.title, entry.details].map(csvCell).join(','))].join('\r\n'));
             return;
         }
         response.render('logs', { entries: entries.slice(0, 200), query, category });

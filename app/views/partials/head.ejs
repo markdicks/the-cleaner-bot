@@ -1,35 +1,29 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
     <title><%= title %> | The Cleaner</title>
     <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/assets/app.css?v=<%= version %>">
-    <link rel="stylesheet" href="/assets/diagnostics.css?v=<%= version %>">
-    <script src="/assets/lucide.js?v=<%= version %>" defer></script>
-    <script src="/assets/app.js?v=<%= version %>" defer></script>
+    <link rel="stylesheet" href="/assets/app.css?v=<%= version %>"><link rel="stylesheet" href="/assets/diagnostics.css?v=<%= version %>"><link rel="stylesheet" href="/assets/workspace.css?v=<%= version %>">
+    <script src="/assets/lucide.js?v=<%= version %>" defer></script><script src="/assets/app.js?v=<%= version %>" defer></script>
 </head>
 <body>
+<button class="navigation-backdrop" type="button" aria-label="Close navigation" data-close-navigation tabindex="-1" hidden></button>
 <aside class="sidebar" id="navigation">
-    <a class="brand" href="/Dashboard"><img src="/assets/mark.svg" width="34" height="34" alt=""><span>The Cleaner<small>Control center</small></span></a>
-    <nav aria-label="Main navigation">
-        <a class="nav-link <%= path.startsWith('/Dashboard') ? 'active' : '' %>" href="/Dashboard"><i data-lucide="layout-dashboard"></i>Dashboard</a>
-        <% if (superAdmin) { %><a class="nav-link <%= path === '/SuperAdmin' ? 'active' : '' %>" href="/SuperAdmin"><i data-lucide="shield-check"></i>Superadmin</a><% } %>
-        <a class="nav-link <%= ['/service','/Service','/status'].includes(path) ? 'active' : '' %>" href="/service"><i data-lucide="activity"></i>Service status</a>
-    </nav>
-    <div class="sidebar-bottom"><span data-bot-status class="badge <%= status.discord.connected ? 'success' : 'warning' %>"><%= status.discord.connected ? 'Bot online' : 'Bot offline' %></span><small>Version <%= version %></small></div>
+    <div class="brand-row"><a class="brand" href="/Dashboard"><img src="/assets/mark.svg" width="32" height="32" alt=""><span>The Cleaner<small>Server management</small></span></a><button class="icon-button close-navigation" type="button" aria-label="Close navigation" title="Close navigation" data-close-navigation><i data-lucide="x"></i></button></div>
+    <% if (guild) { const current = serverChoices.find(server => server.id === guild.guildId); %>
+    <details class="server-picker"><summary><% if (current?.iconUrl) { %><img src="<%= current.iconUrl %>" alt="" width="32" height="32"><% } else { %><span class="server-letter"><%= guild.guildName.slice(0, 1) %></span><% } %><span><%= guild.guildName %><small><%= guild.premiumTier %></small></span><i data-lucide="chevrons-up-down"></i></summary>
+        <div class="server-menu"><% for (const server of serverChoices) { %><a href="<%= serverUrl(server.id) %>" <%- server.id === guild.guildId ? 'aria-current="true"' : '' %>><%= server.name %></a><% } %><a href="/Dashboard"><i data-lucide="server"></i>All servers</a></div>
+    </details>
+    <nav aria-label="Server navigation"><% for (const group of serverNavigation) { %><div class="nav-group"><span class="nav-group-label"><%= group.label %></span><% for (const [key, label, icon] of group.items) { %><a class="nav-link <%= selectedTab === key ? 'active' : '' %>" href="<%= serverUrl(guild.guildId, key) %>" <%- selectedTab === key ? 'aria-current="page"' : '' %>><i data-lucide="<%= icon %>"></i><%= label %></a><% } %></div><% } %></nav>
+    <% } else { %><nav aria-label="Main navigation"><a class="nav-link <%= path === '/Dashboard' ? 'active' : '' %>" href="/Dashboard"><i data-lucide="server"></i>Your servers</a></nav><% } %>
+    <div class="sidebar-bottom"><% if (superAdmin) { %><a class="nav-link <%= path === '/SuperAdmin' ? 'active' : '' %>" href="/SuperAdmin"><i data-lucide="key-round"></i>Application settings</a><% } %><a class="nav-link" href="/service"><i data-lucide="activity"></i>Service status</a><div class="sidebar-status"><span data-bot-status class="badge <%= status.discord.connected ? 'success' : 'warning' %>"><%= status.discord.connected ? 'Bot online' : 'Bot offline' %></span><small>v<%= version %></small></div></div>
 </aside>
 <div class="workspace">
-    <header class="topbar">
-        <button class="icon-button mobile-menu" type="button" id="menu-toggle" title="Toggle navigation" aria-label="Toggle navigation" aria-controls="navigation" aria-expanded="false"><i data-lucide="menu"></i></button>
-        <span class="breadcrumb">The Cleaner <span>/</span> <%= title %></span>
-        <div class="account">
-            <% if (user) { %>
-                <% if (user.avatar) { %><img class="avatar" src="<%= user.avatar %>" alt=""><% } %><span><%= user.name %></span>
-                <form method="post" action="/Auth/Logout"><input type="hidden" name="csrf" value="<%= csrf %>"><button class="icon-button" title="Sign out" aria-label="Sign out"><i data-lucide="log-out"></i></button></form>
-            <% } else { %><a class="quiet-link" href="/Auth/Login">Sign in</a><% } %>
-        </div>
+    <header class="topbar"><button class="icon-button mobile-menu" type="button" id="menu-toggle" title="Open navigation" aria-label="Open navigation" aria-controls="navigation" aria-expanded="false"><i data-lucide="menu"></i></button>
+        <span class="breadcrumb"><%= guild ? guild.guildName : 'The Cleaner' %><span>/</span><%= title %></span>
+        <% if (guild) { %><div class="settings-search" role="search"><i data-lucide="search"></i><input type="search" id="settings-search" aria-label="Search settings" placeholder="Search settings" autocomplete="off" aria-controls="settings-results" aria-expanded="false"><div id="settings-results" class="search-results" hidden><div class="search-results-heading">Settings</div><% for (const [label, tab, view, anchor, words] of settingsSearch) { %><a href="<%= serverUrl(guild.guildId, tab, view, anchor) %>" data-setting-result data-keywords="<%= `${label} ${words}`.toLowerCase() %>"><%= label %></a><% } %><p data-no-settings hidden>No matching settings.</p></div></div><% } %>
+        <div class="account"><% if (user) { %><% if (user.avatar) { %><img class="avatar" src="<%= user.avatar %>" alt=""><% } %><span><%= user.name %></span><form method="post" action="/Auth/Logout"><input type="hidden" name="csrf" value="<%= csrf %>"><button class="icon-button" title="Sign out" aria-label="Sign out"><i data-lucide="log-out"></i></button></form><% } else { %><a class="quiet-link" href="/Auth/Login">Sign in</a><% } %></div>
     </header>
     <main>
     <% if (message) { %><div class="notice" role="status"><i data-lucide="info"></i><span><%= message %></span><button type="button" class="icon-button dismiss-notice" title="Dismiss" aria-label="Dismiss"><i data-lucide="x"></i></button></div><% } %>

@@ -1,5 +1,5 @@
 <section class="section log-diagnostics">
-    <div class="section-heading"><h2>Log channel connection</h2><a href="?tab=logs">Refresh checks</a></div>
+    <div class="section-heading"><h2>Log delivery</h2><a class="icon-button" href="?tab=logs&view=checks" title="Refresh checks" aria-label="Refresh checks"><i data-lucide="refresh-cw"></i></a></div>
     <% for (const check of logChecks) { %>
     <article class="log-check">
         <div class="log-check-heading"><h3><%= check.label %></h3><span class="badge <%= check.ok && check.status === 'ready' && !check.lastFailure ? 'success' : 'warning' %>"><%= check.lastFailure ? 'Delivery failed' : check.status === 'ready' ? 'Ready' : check.status === 'warning' ? 'Limited' : 'Action required' %></span></div>
@@ -7,6 +7,7 @@
         <% if (check.action) { %><p class="muted"><%= check.action %></p><% } %>
         <% if (check.observationWarning) { %><p class="text-warning"><%= check.observationWarning %></p><% } %>
         <% if (check.lastFailure) { %><p class="text-warning"><%= check.lastFailure %></p><% } %>
+        <% if (!check.ok) { %><a class="inline-link" href="<%= serverUrl(guild.guildId, 'logs', check.code === 'server_delivery_disabled' ? 'events' : 'channels') %>"><i data-lucide="settings-2"></i><%= check.code === 'server_delivery_disabled' ? 'Server event settings' : 'Log channel settings' %></a><% } %>
         <div class="log-check-footer">
             <span class="muted"><% if (check.lastSuccessAt) { %>Last delivered: <time datetime="<%= check.lastSuccessAt %>"><%= new Date(check.lastSuccessAt).toLocaleString('en-GB', { timeZone: 'UTC' }) %> UTC</time><% } else { %>No delivery confirmed this session<% } %></span>
             <form method="post" action="/Dashboard/Guild/<%= guild.guildId %>/test-log"><input type="hidden" name="csrf" value="<%= csrf %>"><input type="hidden" name="category" value="<%= check.category %>"><button class="button secondary" <%= check.canTest ? '' : 'disabled' %>><i data-lucide="send"></i>Send test log</button></form>

@@ -1,0 +1,12 @@
+<form method="post" data-settings-form><input type="hidden" name="csrf" value="<%= csrf %>">
+<% if (view === 'rules') { %><input type="hidden" name="section" value="automodRules">
+<section class="section"><label class="toggle-row module-toggle"><span><i data-lucide="shield-check"></i>AutoMod enabled</span><input class="switch" type="checkbox" name="enableModeration" <%= guild.enableModeration ? 'checked' : '' %>></label></section>
+<% for (const [key, label, inputs] of [
+    ['enableAntiSpam','Spam & image flood',[['spamMessageLimit','Message limit',2,50],['spamWindowSeconds','Window (seconds)',2,120]]],
+    ['enableProfanityFilter','Blocked words',[]],['enableInviteFilter','Discord invites',[]],['enableLinkFilter','External links',[]],
+    ['enableCapsFilter','Excessive capitals',[['capsMinimumLength','Minimum letters',5,2000],['capsPercentage','Capitals (%)',25,100]]],
+    ['enableMentionFilter','Mention spam',[['mentionLimit','Mention limit',2,50]]]
+]) { %><section class="filter-rule"><label class="toggle-row"><span><%= label %><% if (key === 'enableProfanityFilter') { %><small><%= guild.blockedWords.length %> words</small><% } %></span><input class="switch" type="checkbox" name="<%= key %>" data-rule-toggle <%= guild[key] ? 'checked' : '' %>></label><% if (inputs.length) { %><div class="field-grid rule-options" data-rule-options><% for (const [name, caption, min, max] of inputs) { %><label class="field"><span><%= caption %></span><input type="number" name="<%= name %>" min="<%= min %>" max="<%= max %>" value="<%= guild[name] %>" required></label><% } %></div><% } %></section><% } %>
+<% } else if (view === 'words') { %><input type="hidden" name="section" value="words"><section class="section"><div class="section-heading"><h2>Blocked words</h2><span class="muted" data-word-count><%= guild.blockedWords.length %> / 1,000</span></div><label class="field"><span>Words & phrases</span><textarea name="blockedWords" rows="12" placeholder="One word or phrase per line"><%= guild.blockedWords.join('\n') %></textarea></label></section>
+<% } else { %><input type="hidden" name="section" value="ignored"><section class="section"><div class="section-heading"><h2>Ignored channels</h2></div><%- include('channel-list', { name: 'ignoredModerationChannelIds', selected: guild.ignoredModerationChannelIds, listId: 'ignored-channel-list', label: 'ignored channels' }) %></section><% } %>
+<%- include('save-bar') %></form>

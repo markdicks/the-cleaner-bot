@@ -31,7 +31,41 @@ export function validateGuildSettings(body, current, channels) {
         if (!isChannel(id)) throw new Error('Select a text channel from this server.');
         return id;
     };
-    if (body.section === 'moderation') {
+    const number = (key, min, max) => {
+        const value = Number(body[key]);
+        const label = { spamWindowSeconds: 'Spam window', spamMessageLimit: 'Message limit', mentionLimit: 'Mention limit', capsMinimumLength: 'Minimum letters', capsPercentage: 'Capitals percentage', maxWarningsBeforeTimeout: 'Warnings before timeout', timeoutMinutes: 'Timeout duration' }[key] || key;
+        if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${label} must be between ${min} and ${max}.`);
+        next[key] = value;
+    };
+    const words = () => {
+        next.blockedWords = [...new Set(String(body.blockedWords || '').split(/[\r\n,]+/).map(word => word.trim().toLowerCase()).filter(Boolean))];
+        if (next.blockedWords.length > 1000 || next.blockedWords.some(word => word.length > 100)) throw new Error('Use at most 1,000 blocked words of 100 characters each.');
+    };
+    if (body.section === 'automodRules') {
+        for (const key of ['enableModeration', 'enableAntiSpam', 'enableInviteFilter', 'enableLinkFilter', 'enableCapsFilter', 'enableProfanityFilter', 'enableMentionFilter']) next[key] = body[key] === 'on';
+        for (const args of [['spamWindowSeconds', 2, 120], ['spamMessageLimit', 2, 50], ['mentionLimit', 2, 50], ['capsMinimumLength', 5, 2000], ['capsPercentage', 25, 100]]) number(...args);
+    } else if (body.section === 'words') words();
+    else if (body.section === 'ignored') next.ignoredModerationChannelIds = [...new Set([body.ignoredModerationChannelIds || []].flat().map(checkChannel).filter(Boolean))];
+    else if (body.section === 'moderationOptions') {
+        next.enableDmModerationNotices = body.enableDmModerationNotices === 'on';
+        number('maxWarningsBeforeTimeout', 1, 100); number('timeoutMinutes', 1, 40320);
+    } else if (body.section === 'levelSettings') {
+        next.levelsChannelId = checkChannel(body.levelsChannelId);
+        for (const key of ['enableLevels', 'enableVoiceXp']) next[key] = body[key] === 'on';
+    } else if (body.section === 'welcome') {
+        next.welcomeChannelId = checkChannel(body.welcomeChannelId); next.enableWelcome = body.enableWelcome === 'on';
+        for (const key of ['welcomeMessage', 'goodbyeMessage']) next[key] = String(body[key] || '').slice(0, 1900);
+    } else if (body.section === 'general') {
+        next.prefix = String(body.prefix || '').trim();
+        if (!next.prefix || next.prefix.length > 10) throw new Error('Prefix must contain 1 to 10 characters.');
+        next.logChannelId = checkChannel(body.logChannelId);
+    } else if (['logDestinations', 'logEvents'].includes(body.section)) {
+        if (!businessActive(current)) throw new Error('Business or Enterprise is required for audit log settings.');
+        const ids = body.section === 'logEvents' ? ['serverChannelId'] : ['moderationChannelId', 'autoModChannelId', 'serverChannelId'];
+        const flags = body.section === 'logEvents' ? ['sendServerEventsToDiscord', 'messageEdits', 'messageDeletes', 'memberChanges', 'voiceChanges', 'serverChanges', 'channelChanges', 'roleChanges'] : ['enabled', 'moderationActions', 'autoModActions', 'sendServerEventsToDiscord', 'includeMessageContent'];
+        for (const key of ids) next.auditLogs[key] = checkChannel(body[key]);
+        for (const key of flags) next.auditLogs[key] = body[key] === 'on';
+    } else if (body.section === 'moderation') {
         for (const key of ['enableModeration', 'enableAntiSpam', 'enableInviteFilter', 'enableLinkFilter', 'enableCapsFilter', 'enableProfanityFilter', 'enableMentionFilter', 'enableDmModerationNotices']) next[key] = body[key] === 'on';
         for (const [key, min, max] of [['spamWindowSeconds', 2, 120], ['spamMessageLimit', 2, 50], ['mentionLimit', 2, 50], ['capsMinimumLength', 5, 2000], ['capsPercentage', 25, 100], ['maxWarningsBeforeTimeout', 1, 100], ['timeoutMinutes', 1, 40320]]) {
             const value = Number(body[key]);
@@ -59,7 +93,8 @@ export function validateGuildSettings(body, current, channels) {
         next.cleaner.intervalMinutes = interval;
         next.cleaner.monitorChannels = [...new Set([body.monitorChannels || []].flat().map(checkChannel).filter(Boolean))];
         next.cleaner.logChannelId = checkChannel(body.cleanerLogChannelId);
-        const bots = String(body.botList || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+        const lines = body.botList !== undefined || body.botIds === undefined ? String(body.botList || '').split(/\r?\n/) : [body.botIds].flat().map((id, index) => `${id} ${[body.botRounds || []].flat()[index] ?? ''}`);
+        const bots = lines.map(line => line.trim()).filter(Boolean).map(line => {
             const [botId, roundsText = '-1'] = line.split(/\s+/);
             const rounds = Number(roundsText);
             if (!snowflake(botId) || !Number.isInteger(rounds) || (rounds !== -1 && (rounds < 1 || rounds > 10000))) throw new Error('Use a bot ID followed by rounds (1–10,000 or -1 for permanent).');

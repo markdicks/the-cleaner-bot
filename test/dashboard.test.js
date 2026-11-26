@@ -81,7 +81,7 @@ test('all dashboard pages render; non-owner cannot access superadmin or another 
     const { request, session } = await fixture(t);
     const owner = session();
     assert.equal((await request('/SuperAdmin', { headers: { cookie: owner.cookie } })).status, 200);
-    for (const tab of ['overview', 'moderation', 'channels', 'logs', 'cleaner', 'cases', 'levels']) {
+    for (const tab of ['overview', 'moderation', 'channels', 'automod', 'actions', 'logs', 'cleaner', 'cases', 'levels', 'welcome', 'settings']) {
         const response = await request(`/Dashboard/Guild/${guildId}?tab=${tab}`, { headers: { cookie: owner.cookie } });
         assert.equal(response.status, 200, tab); assert.doesNotMatch(await response.text(), /Request could not be completed/);
     }
@@ -91,6 +91,107 @@ test('all dashboard pages render; non-owner cannot access superadmin or another 
     assert.equal((await request(`/Dashboard/AuditLogs/${guildId}`, { headers: { cookie: member.cookie } })).status, 403);
     assert.equal((await request('/SuperAdmin', { headers: { cookie: owner.cookie.slice(0, -5) + 'wrong' } })).status, 200);
     assert.doesNotMatch(await (await request('/SuperAdmin', { headers: { cookie: 'CleanerSession=forged' } })).text(), /Owner verified/);
+});
+
+test('module views render one focused form with server-scoped navigation and direct setting search', async t => {
+    const { request, session, store, calls } = await fixture(t); const member = session(userId);
+    await store.update(state => { state.guilds[guildId].premiumTier = 'Business'; });
+    for (const [tab, view, section] of [['automod','rules','automodRules'],['automod','words','words'],['automod','ignored','ignored'],['actions','settings','moderationOptions'],['logs','channels','logDestinations'],['logs','events','logEvents'],['levels','settings','levelSettings'],['welcome','','welcome'],['settings','','general'],['cleaner','','cleaner']]) {
+        const response = await request(`/Dashboard/Guild/${guildId}?tab=${tab}&view=${view}`, { headers: { cookie: member.cookie } });
+        assert.equal(response.status, 200, `${tab}/${view}`); const page = await response.text();
+        assert.match(page, new RegExp(`name="section" value="${section}"`));
+        assert.equal((page.match(/data-settings-form/g) || []).length, 1);
+        assert.match(page, /aria-label="Server navigation"/); assert.match(page, /aria-label="Search settings"/);
+        assert.match(page, /data-save-state/); assert.match(page, /data-discard/);
+        assert.doesNotMatch(page, /Other server/);
+    }
+    const words = await (await request(`/Dashboard/Guild/${guildId}?tab=automod&view=words`, { headers: { cookie: member.cookie } })).text();
+    assert.doesNotMatch(words, /name="levelsChannelId"|name="welcomeMessage"|name="spamMessageLimit"/);
+    const levels = await (await request(`/Dashboard/Guild/${guildId}?tab=levels`, { headers: { cookie: member.cookie } })).text();
+    assert.match(levels, /Level announcement channel/); assert.doesNotMatch(levels, /name="welcomeChannelId"|name="ignoredModerationChannelIds"/);
+    assert.deepEqual(calls, [], 'page loads must not send log tests or run moderation actions');
+});
+
+test('partial module saves change only the fields owned by that view', async t => {
+    const { request, session, store } = await fixture(t); const owner = session();
+    await store.update(state => { const config = state.guilds[guildId]; config.prefix = '?'; config.enableDmModerationNotices = true; config.enableWelcome = true; config.welcomeMessage = 'Keep welcome'; config.ignoredModerationChannelIds = [channelId]; });
+    const scenarios = [
+        [{ section: 'words', blockedWords: 'first,second' }, ['blockedWords']],
+        [{ section: 'ignored' }, ['ignoredModerationChannelIds']],
+        [{ section: 'levelSettings', levelsChannelId: channelId, enableLevels: 'on' }, ['levelsChannelId','enableLevels','enableVoiceXp']],
+        [{ section: 'welcome', welcomeChannelId: channelId, welcomeMessage: 'Hello', goodbyeMessage: 'Goodbye' }, ['welcomeChannelId','enableWelcome','welcomeMessage','goodbyeMessage']],
+        [{ section: 'general', prefix: '!!', logChannelId: channelId }, ['prefix','logChannelId']],
+        [{ section: 'moderationOptions', maxWarningsBeforeTimeout: '7', timeoutMinutes: '20' }, ['maxWarningsBeforeTimeout','timeoutMinutes','enableDmModerationNotices']],
+        [{ section: 'automodRules', enableModeration: 'on', enableAntiSpam: 'on', spamWindowSeconds: '9', spamMessageLimit: '6', mentionLimit: '7', capsMinimumLength: '15', capsPercentage: '80' }, ['enableModeration','enableAntiSpam','enableInviteFilter','enableLinkFilter','enableCapsFilter','enableProfanityFilter','enableMentionFilter','spamWindowSeconds','spamMessageLimit','mentionLimit','capsMinimumLength','capsPercentage']]
+    ];
+    for (const [body, keys] of scenarios) {
+        const before = structuredClone((await store.read()).guilds[guildId]);
+        const result = await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, premiumTier: 'Enterprise', ...body }) });
+        assert.equal(new URL(result.headers.get('location'), 'http://local').searchParams.get('message'), 'Settings saved.');
+        const after = (await store.read()).guilds[guildId];
+        for (const key of [...keys, 'updatedAt']) { delete before[key]; delete after[key]; }
+        assert.deepEqual(after, before, body.section);
+    }
+});
+
+test('log destination and event saves preserve settings in the other Action Log view', async t => {
+    const { request, session, store } = await fixture(t); const owner = session();
+    await store.update(state => { const config = state.guilds[guildId]; config.premiumTier = 'Business'; config.auditLogs.messageEdits = true; config.auditLogs.channelChanges = true; config.auditLogs.roleChanges = true; });
+    const post = body => request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, ...body }) });
+    await post({ section: 'logDestinations', enabled: 'on', moderationActions: 'on', autoModActions: 'on', includeMessageContent: 'on', moderationChannelId: channelId, autoModChannelId: channelId, serverChannelId: channelId });
+    let logs = (await store.read()).guilds[guildId].auditLogs;
+    assert.equal(logs.messageEdits, true); assert.equal(logs.channelChanges, true); assert.equal(logs.roleChanges, true);
+    await post({ section: 'logEvents', serverChannelId: channelId, sendServerEventsToDiscord: 'on', voiceChanges: 'on' });
+    logs = (await store.read()).guilds[guildId].auditLogs;
+    assert.equal(logs.moderationChannelId, channelId); assert.equal(logs.autoModChannelId, channelId);
+    assert.equal(logs.moderationActions, true); assert.equal(logs.autoModActions, true); assert.equal(logs.includeMessageContent, true);
+    assert.equal(logs.voiceChanges, true); assert.equal(logs.channelChanges, false);
+});
+
+test('new module forms reject foreign channels, missing channels, CSRF failures and free-plan log writes', async t => {
+    const { request, session, store, bot } = await fixture(t); const owner = session();
+    const post = body => request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, ...body }) });
+    const before = (await store.read()).guilds[guildId];
+    const wrongCsrf = await post({ csrf: 'wrong', section: 'words', blockedWords: 'changed' }); assert.equal(wrongCsrf.status, 403);
+    for (const body of [{ section: 'levelSettings', levelsChannelId: otherGuild }, { section: 'welcome', welcomeChannelId: otherGuild }, { section: 'ignored', ignoredModerationChannelIds: otherGuild }, { section: 'logEvents', serverChannelId: channelId }]) await post(body);
+    assert.deepEqual((await store.read()).guilds[guildId], before);
+    bot.channels = () => [];
+    await post({ section: 'levelSettings', levelsChannelId: '', enableLevels: 'on' });
+    assert.deepEqual((await store.read()).guilds[guildId], before);
+});
+
+test('punishment history searches all records, filters and paginates with moderator IDs', async t => {
+    const { request, session, store } = await fixture(t); const member = session(userId);
+    await store.update(state => { state.cases = Array.from({ length: 60 }, (_, index) => ({ id: index + 1, guildId, targetUserId: userId, targetUserTag: 'Member', moderatorUserId: SUPERADMIN_ID, action: index % 2 ? 'ban' : 'warn', reason: `Record-${index + 1}-end`, createdAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString() })); state.cases.push({ ...state.cases[0], id: 1000, guildId: otherGuild, reason: 'cross-server-secret' }); });
+    const headers = { cookie: member.cookie };
+    const first = await (await request(`/Dashboard/Guild/${guildId}?tab=cases`, { headers })).text();
+    assert.match(first, /Page 1 of 3/); assert.match(first, /Record-60-end/); assert.doesNotMatch(first, /Record-1-end|cross-server-secret/);
+    const last = await (await request(`/Dashboard/Guild/${guildId}?tab=cases&page=3`, { headers })).text();
+    assert.match(last, /Record-1-end/); assert.match(last, new RegExp(SUPERADMIN_ID));
+    const filtered = await (await request(`/Dashboard/Guild/${guildId}?tab=cases&q=${SUPERADMIN_ID}&action=ban`, { headers })).text();
+    assert.match(filtered, /Page 1 of 2/); assert.doesNotMatch(filtered, /Record-59-end|cross-server-secret/);
+    const one = await (await request(`/Dashboard/Guild/${guildId}?tab=cases&q=Record-1-end`, { headers })).text();
+    assert.match(one, /Record-1-end/); assert.doesNotMatch(one, /Record-2-end/);
+});
+
+test('punishment CSV exports all matching records with safe cells and existing server authorization', async t => {
+    const { request, session, store } = await fixture(t); const member = session(userId);
+    await store.update(state => { state.cases = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, guildId, targetUserId: userId, moderatorUserId: SUPERADMIN_ID, action: 'warn', reason: '=SUM(1,2)', createdAt: '2026-01-01T00:00:00Z' })); state.cases.push({ ...state.cases[0], guildId: otherGuild, reason: 'hidden-other-guild' }); });
+    const response = await request(`/Dashboard/Guild/${guildId}?tab=cases&format=csv`, { headers: { cookie: member.cookie } });
+    assert.equal(response.status, 200); const csv = await response.text();
+    assert.equal(csv.split('\r\n').length, 41); assert.match(csv, /Moderator ID/); assert.match(csv, /"'=SUM/); assert.doesNotMatch(csv, /hidden-other-guild/);
+    assert.equal((await request(`/Dashboard/Guild/${otherGuild}?tab=cases&format=csv`, { headers: { cookie: member.cookie } })).status, 403);
+});
+
+test('structured cleaner targets save correctly, including permanent targets and clearing the list', async t => {
+    const { request, session, store } = await fixture(t); const owner = session();
+    const body = new URLSearchParams({ csrf: owner.csrf, section: 'cleaner', intervalMinutes: '30', cleanerLogChannelId: channelId, monitorChannels: channelId });
+    for (const [id, rounds] of [['123456789012345678','-1'],['123456789012345679','12']]) { body.append('botIds', id); body.append('botRounds', rounds); }
+    await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body });
+    assert.deepEqual((await store.read()).guilds[guildId].cleaner.botList, [{ botId: '123456789012345678', rounds: -1 }, { botId: '123456789012345679', rounds: 12 }]);
+    body.delete('botIds'); body.delete('botRounds');
+    await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body });
+    assert.deepEqual((await store.read()).guilds[guildId].cleaner.botList, []);
 });
 
 test('writes require CSRF and reject cross-origin requests', async t => {
@@ -121,7 +222,7 @@ test('server channel settings persist and reject cross-server IDs', async t => {
     const owner = session();
     const body = { csrf: owner.csrf, section: 'channels', prefix: '?', levelsChannelId: channelId, logChannelId: '', welcomeChannelId: '', enableLevels: 'on', enableVoiceXp: 'on', ignoredModerationChannelIds: channelId, welcomeMessage: 'Hi {user}', goodbyeMessage: 'Bye' };
     const saved = await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams(body) });
-    assert.match(saved.headers.get('location'), /Settings%20saved/);
+    assert.equal(new URL(saved.headers.get('location'), 'http://local').searchParams.get('message'), 'Settings saved.');
     const state = await store.read(); assert.equal(state.guilds[guildId].levelsChannelId, channelId); assert.deepEqual(state.guilds[guildId].ignoredModerationChannelIds, [channelId]);
     await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ ...body, levelsChannelId: otherGuild }) });
     assert.equal((await store.read()).guilds[guildId].levelsChannelId, channelId);
@@ -131,11 +232,11 @@ test('Channel changes is visible and saved on the audit settings page, including
     const { request, session, store } = await fixture(t);
     const owner = session();
     await store.update(state => { const config = state.guilds[guildId]; config.premiumTier = 'Business'; delete config.auditLogs.channelChanges; config.auditLogs.serverChanges = true; });
-    const legacyPage = await (await request(`/Dashboard/Guild/${guildId}?tab=logs`, { headers: { cookie: owner.cookie } })).text();
+    const legacyPage = await (await request(`/Dashboard/Guild/${guildId}?tab=logs&view=events`, { headers: { cookie: owner.cookie } })).text();
     assert.match(legacyPage, /name="channelChanges"\s+checked/);
     assert.match(legacyPage, /name="roleChanges"/);
     const saved = await request(`/Dashboard/Guild/${guildId}`, { method: 'POST', headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, section: 'logs', enabled: 'on', moderationActions: 'on', autoModActions: 'on', sendServerEventsToDiscord: 'on', serverChannelId: channelId, channelChanges: 'on', roleChanges: 'on' }) });
-    assert.equal(saved.status, 302); assert.match(saved.headers.get('location'), /Settings%20saved/);
+    assert.equal(saved.status, 302); assert.equal(new URL(saved.headers.get('location'), 'http://local').searchParams.get('message'), 'Settings saved.');
     const config = (await store.read()).guilds[guildId];
     assert.equal(config.auditLogs.channelChanges, true); assert.equal(config.auditLogs.serverChanges, false); assert.equal(config.auditLogs.roleChanges, true);
 });

@@ -1,0 +1,12 @@
+<div class="quick-actions"><a class="button secondary" href="<%= serverUrl(guild.guildId, 'actions') %>"><i data-lucide="gavel"></i>Moderate member</a><a class="button secondary" href="<%= serverUrl(guild.guildId, 'actions', 'purge') %>"><i data-lucide="trash-2"></i>Purge messages</a><a class="button secondary" href="<%= serverUrl(guild.guildId, 'cases') %>"><i data-lucide="search"></i>Look up history</a></div>
+<section class="section"><div class="section-heading"><h2>Modules</h2></div><div class="module-directory">
+<% for (const [key, label, icon, value, enabled, locked] of [
+    ['automod','AutoMod','shield-check',`${guild.blockedWords.length} blocked words`,guild.enableModeration],
+    ['actions','Moderation','gavel',`${totalCases} recorded cases`,true],
+    ['logs','Action Log','scroll-text',!business ? 'Business plan required' : guild.auditLogs.sendServerEventsToDiscord ? 'Server-event delivery on' : 'Server-event delivery off',business && guild.auditLogs.enabled,!business],
+    ['levels','Levels','trophy',guild.enableVoiceXp ? 'Chat & voice XP' : 'Chat XP',guild.enableLevels],
+    ['welcome','Welcome','hand',guild.welcomeChannelId ? `Channel ${channels.find(channel => channel.id === guild.welcomeChannelId)?.name || 'unavailable'}` : 'No channel selected',guild.enableWelcome],
+    ['cleaner','Cleaner','brush',`${guild.cleaner.botList.length} bots / ${guild.cleaner.intervalMinutes} min`,guild.cleaner.botList.length > 0]
+]) { %><a class="module-row" href="<%= serverUrl(guild.guildId, key) %>"><span class="module-symbol"><i data-lucide="<%= icon %>"></i></span><span class="module-row-name"><strong><%= label %></strong><small><%= value %></small></span><span class="badge <%= enabled ? 'success' : '' %>"><%= locked ? 'Business' : enabled ? 'Enabled' : 'Disabled' %></span><i class="module-settings-icon" data-lucide="settings-2"></i></a><% } %>
+</div></section>
+<section class="section"><div class="section-heading"><h2>Recent punishments</h2><a href="<%= serverUrl(guild.guildId, 'cases') %>">View history</a></div><%- include('cases') %></section>

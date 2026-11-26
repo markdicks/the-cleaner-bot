@@ -23,20 +23,27 @@ await store.update(state => {
     state.settings.clientId = '123456789012345678';
     for (const guild of guilds) { state.guilds[guild.id] = guildDefaults(guild.id, guild.name); state.guilds[guild.id].premiumTier = 'Business'; }
     state.guilds[guildId].blockedWords = ['example phrase'];
-    state.cases = [{ id: 1, guildId, action: 'warn', targetUserTag: 'Example member', reason: 'Message spam', createdAt: new Date().toISOString() }];
-    state.nextCaseId = 2;
+    state.guilds[guildId].auditLogs.serverChannelId = '1574428730997084240';
+    state.guilds[guildId].auditLogs.sendServerEventsToDiscord = true;
+    state.guilds[guildId].auditLogs.messageEdits = true;
+    state.guilds[guildId].cleaner.botList = [{ botId: '123456789012345678', rounds: -1 }, { botId: '123456789012345679', rounds: 12 }];
+    state.guilds[guildId].cleaner.monitorChannels = ['1574423826417193091'];
+    state.guilds['1505183872705363997'].premiumTier = 'Free';
+    state.cases = Array.from({ length: 33 }, (_, index) => ({ id: index + 1, guildId, action: ['warn','timeout','kick','ban'][index % 4], targetUserId: '680840717731364927', targetUserTag: `Example member ${index % 3 + 1}`, moderatorUserId: '680840717731364926', reason: ['Message spam', 'Repeated external links', 'Mention spam'][index % 3], createdAt: new Date(Date.now() - index * 3600000).toISOString() }));
+    state.nextCaseId = 34;
     state.audit = [{ guildId, category: 'server', title: 'Message Edited', details: 'Example edit before and after', createdAt: new Date().toISOString(),
         presentation: { description: 'From: Example member | In: general-chat', footer: 'Author: 680840717731364927 | Message ID: 1574423826417193092',
             fields: [{ name: 'Before', value: 'The original message before it was edited.' }, { name: 'After', value: 'The updated message with a long link: https://example.com/' + 'long-path-segment/'.repeat(18) }],
             jumpUrl: `https://discord.com/channels/${guildId}/1574423826417193091/1574423826417193092` } }];
 });
 const bot = new BotController({ store, env: {}, version });
-let connected = false;
+let connected = process.env.PREVIEW_DISCONNECTED !== 'true';
+Object.defineProperty(bot, 'contentAccess', { get: () => connected });
 bot.isReady = () => connected;
 bot.getConnectionStatus = () => ({ connected, status: connected ? 'connected' : 'action_required', errorCode: connected ? null : 'intents_required', action: connected ? null : connectionAction('intents_required'), privilegedActive: connected, reconnecting: false });
 bot.restart = async () => { connected = true; };
 bot.guilds = () => guilds;
-bot.channels = () => [{ id: '1574423826417193091', name: 'flagged-messages', text: true }, { id: '1574428730997084240', name: 'moderation-log', text: true }, { id: '1246174778281300048', name: 'levels', text: true }];
+bot.channels = () => [{ id: '1574423826417193091', name: 'flagged-messages', text: true }, { id: '1574428730997084240', name: 'moderation-log', text: true }, { id: '1246174778281300048', name: 'levels', text: true }, { id: '1574423826417193092', name: 'general-chat', text: true }, { id: '1574423826417193093', name: 'a-very-long-channel-name-for-community-announcements', text: true }];
 bot.canManage = async () => true;
 bot.login = async () => {};
 bot.moderate = async () => { throw new Error('This local UI fixture has no Discord connection.'); };

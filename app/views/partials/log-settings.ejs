@@ -1,22 +1,7 @@
-<section class="section">
-    <div class="section-heading"><h2>Audit logging</h2><% if (business) { %><a class="button secondary" href="/Dashboard/AuditLogs/<%= guild.guildId %>"><i data-lucide="search"></i>Browse history</a><% } %></div>
-    <% if (!business) { %>
-    <div class="empty compact"><i data-lucide="lock-keyhole"></i><h3>Business plan required</h3><p>Current plan: <%= guild.premiumTier %></p></div>
-    <% } else { %>
-    <form method="post">
-        <input type="hidden" name="csrf" value="<%= csrf %>"><input type="hidden" name="section" value="logs">
-        <div class="field-grid">
-        <% for (const [key, label] of [['moderationChannelId','Bans, mutes, warnings & timeouts'],['autoModChannelId','Flagged words & links'],['serverChannelId','Server events']]) { %>
-            <label class="field"><span><%= label %></span><select name="<%= key %>"><option value="">None</option><% channels.forEach(channel => { %><option value="<%= channel.id %>" <%= guild.auditLogs[key] === channel.id ? 'selected' : '' %>>#<%= channel.name %></option><% }); %></select></label>
-        <% } %>
-        </div>
-        <div class="toggle-grid">
-        <% for (const [key, label] of [['enabled','Audit logging'],['moderationActions','Moderation actions'],['autoModActions','AutoMod actions'],['includeMessageContent','Include message content'],['sendServerEventsToDiscord','Send server events to Discord'],['messageEdits','Message edits'],['messageDeletes','Message deletions & bulk deletes'],['memberChanges','Member changes'],['voiceChanges','Voice changes'],['serverChanges','Server name changes'],['channelChanges','Channel changes'],['roleChanges','Role changes']]) { %>
-            <% const checked = key === 'channelChanges' ? (guild.auditLogs.channelChanges ?? guild.auditLogs.serverChanges) : guild.auditLogs[key] === true || (['moderationActions','autoModActions'].includes(key) && guild.auditLogs[key] === undefined); %>
-            <label class="toggle-row"><span><%= label %></span><input class="switch" type="checkbox" name="<%= key %>" <%= checked ? 'checked' : '' %>></label>
-        <% } %>
-        </div>
-        <div class="form-actions"><button class="button primary"><i data-lucide="save"></i>Save audit settings</button></div>
-    </form>
-    <% } %>
-</section>
+<% if (!business) { %><section class="section"><div class="empty compact"><i data-lucide="lock-keyhole"></i><h2>Business plan required</h2><span class="badge"><%= guild.premiumTier %></span></div></section>
+<% } else { %><form method="post" data-settings-form><input type="hidden" name="csrf" value="<%= csrf %>"><input type="hidden" name="section" value="<%= view === 'events' ? 'logEvents' : 'logDestinations' %>">
+<% if (view === 'channels') { %><section class="section"><div class="toggle-grid"><% for (const [key, label] of [['enabled','Audit logging enabled'],['includeMessageContent','Include message content']]) { %><label class="toggle-row"><span><%= label %></span><input class="switch" type="checkbox" name="<%= key %>" <%= guild.auditLogs[key] ? 'checked' : '' %>></label><% } %></div></section>
+<% for (const [name, label, toggle, toggleLabel, id] of [['moderationChannelId','Bans, mutes, warnings & timeouts','moderationActions','Moderation actions','moderation-channel'],['autoModChannelId','Flagged words & links','autoModActions','AutoMod actions','automod-channel'],['serverChannelId','Server events','sendServerEventsToDiscord','Send server events to Discord','server-channel']]) { %><section class="section destination-row"><div><h2><%= label %></h2><label class="toggle-row"><span><%= toggleLabel %></span><input class="switch" type="checkbox" name="<%= toggle %>" <%= guild.auditLogs[toggle] === true || (toggle !== 'sendServerEventsToDiscord' && guild.auditLogs[toggle] === undefined) ? 'checked' : '' %>></label></div><div><%- include('channel-field', { name, label: 'Destination channel', value: guild.auditLogs[name], fieldId: id }) %><% if (name === 'serverChannelId') { %><a class="inline-link" href="<%= serverUrl(guild.guildId, 'logs', 'events') %>">Select server events</a><% } %></div></section><% } %>
+<% } else { %><section class="section" id="server-events"><div class="field-grid"><%- include('channel-field', { name: 'serverChannelId', label: 'Server-event log channel', value: guild.auditLogs.serverChannelId }) %></div><label class="toggle-row"><span>Send server events to Discord</span><input class="switch" type="checkbox" name="sendServerEventsToDiscord" <%= guild.auditLogs.sendServerEventsToDiscord ? 'checked' : '' %>></label></section>
+<% for (const [heading, events] of [['Messages',[['messageEdits','Message edits'],['messageDeletes','Message deletions & bulk deletes']]],['Members',[['memberChanges','Member joins & leaves'],['voiceChanges','Voice joins, moves & leaves']]],['Server changes',[['channelChanges','Channel changes'],['roleChanges','Role changes'],['serverChanges','Server name changes']]]]) { %><section class="section"><div class="section-heading"><h2><%= heading %></h2></div><div class="toggle-grid"><% for (const [key, label] of events) { const checked = key === 'channelChanges' ? guild.auditLogs.channelChanges ?? guild.auditLogs.serverChanges : guild.auditLogs[key]; %><label class="toggle-row"><span><%= label %></span><input class="switch" type="checkbox" name="<%= key %>" <%= checked ? 'checked' : '' %>></label><% } %></div></section><% } %>
+<% } %><%- include('save-bar') %></form><% } %>

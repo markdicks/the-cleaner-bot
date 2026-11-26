@@ -1,6 +1,6 @@
 {
     "name": "the-cleaner-bot",
-    "version": "2.3.0",
+    "version": "2.4.0",
     "description": "Discord moderation and cleaning bot with a Hostinger-compatible management dashboard.",
     "main": "index.js",
     "type": "module",
